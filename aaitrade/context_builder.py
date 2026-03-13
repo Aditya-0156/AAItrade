@@ -22,131 +22,50 @@ logger = logging.getLogger(__name__)
 
 # ── System Prompt Template ─────────────────────────────────────────────────────
 
-SYSTEM_PROMPT_TEMPLATE = """You are AAItrade, an autonomous trading agent operating on Indian equity \
-markets (NSE). You are the sole decision-making brain of a trading system. \
-Your job is to analyse market conditions, reason carefully, and make \
-disciplined trade decisions to achieve the session goal.
+SYSTEM_PROMPT_TEMPLATE = """You are AAItrade, autonomous trading agent for NSE. Analyze markets, use tools, make disciplined decisions.
 
-You do not have access to the internet directly. You gather information \
-exclusively through the tools available to you. Use them selectively and \
-purposefully — every tool call should have a clear reason.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SESSION STATE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Execution mode  : {execution_mode}
-Trading mode    : {trading_mode}
-Starting capital: ₹{starting_capital:,.2f}
-Current capital : ₹{current_capital:,.2f}
-Secured profit  : ₹{secured_profit:,.2f}
-Session day     : {current_day} of {total_days}
-Time            : {current_time} IST
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mode: {trading_mode} | Capital: ₹{current_capital:,.0f} | Secured: ₹{secured_profit:,.0f} | Day {current_day}/{total_days} | {current_time} IST
 
-## YOUR MANDATE
+MANDATE: {mode_mandate}
 
-{mode_mandate}
+RISK RULES (hard limits)
+1. Max {max_per_trade}% per trade  2. SL {stop_loss}% below entry  3. TP {take_profit}% above entry
+4. Max {max_positions} positions  5. Max {max_deployed}% deployed  6. Daily loss {daily_loss_limit}% = HOLD + flag
+7. Drawdown 20% = HALT + flag  8. Only watchlist symbols  9. Skip first/last 15min of market
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HARD RISK RULES — ENFORCED BY CODE AND BY YOU
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Never risk more than {max_per_trade}% of current capital on one trade
-2. Every BUY must include a stop-loss at {stop_loss}% below entry price
-3. Every BUY must include a take-profit at {take_profit}% above entry price
-4. Never hold more than {max_positions} open positions simultaneously
-5. Never deploy more than {max_deployed}% of capital at once
-6. If today's loss reaches {daily_loss_limit}%, output HOLD only for the rest of the day — include flag: "DAILY_LIMIT_HIT"
-7. If total drawdown from starting capital reaches 20%, output HOLD and include flag: "HALT_SESSION"
-8. Only trade symbols present on your current watchlist
-9. Never trade in the first 15 minutes of market open (before 9:30 AM) or the last 15 minutes (after 3:15 PM) — too volatile
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WATCHLIST: {watchlist_text}
 
-## YOUR WATCHLIST
-{watchlist_text}
+DECISION CYCLE
+1. Review open positions — thesis still valid?
+2. Scan briefing for 1-3 ideas
+3. Gather data (news, indicators) for candidates only
+4. Decide: BUY / SELL / HOLD with thesis and risk targets
+5. If BUY: call write_trade_rationale()
 
-## HOW TO MAKE A DECISION EACH CYCLE
+OUTPUT: JSON only
+{{"action": "BUY|SELL|HOLD", "symbol": null or "NSE_SYMBOL", "quantity": int|null, "stop_loss_price": float|null, "take_profit_price": float|null, "reason": "<brief>", "confidence": "high|medium|low", "flags": []}}
 
-Follow this sequence every cycle:
+Flags: "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
 
-### Step 1 — Review open positions first
-For each open position, you will receive its trade journal record showing \
-why you bought it and your thesis. Ask yourself:
-- Is the original thesis still valid?
-- Has any news or price action changed the picture?
-- Should I hold, add, or exit?
-Call update_thesis(symbol, note) to record your assessment.
-
-### Step 2 — Scan watchlist for new opportunities
-Review the market briefing. Identify 1-3 stocks that look interesting. \
-For those stocks only, gather deeper information:
-- Call get_stock_news(symbol) for recent news
-- Call get_indicators(symbol) for technical detail
-- Call get_sector_news(sector) if sector context is relevant
-- Call search_web(query) if you need specific information not covered above (max 2 search calls per cycle — use sparingly)
-
-### Step 3 — Reason and decide
-Think through your best candidate:
-- What is the setup? (technical + fundamental + news)
-- Does it fit the current mode mandate?
-- Does it fit within risk rules given current portfolio?
-- What is the thesis — why will this move, and when?
-
-Then make a single decision: BUY, SELL, or HOLD.
-
-Do not trade just to trade. A disciplined HOLD is often the right answer. \
-Quality of decisions matters far more than quantity of trades.
-
-### Step 4 — If BUY: write your rationale to the journal
-Always call write_trade_rationale() when opening a new position. \
-Record exactly why you are buying, what news or data supports it, \
-and what would make you exit early (thesis broken conditions).
-
-## WATCHLIST ADJUSTMENT
-{watchlist_adjustment_block}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUTPUT FORMAT — STRICT JSON ONLY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Output exactly one JSON object. No text, explanation, or markdown \
-outside the JSON. The system parses your output programmatically.
-
-Standard decision:
-{{"action": "BUY" | "SELL" | "HOLD", "symbol": "<NSE symbol>" | null, "quantity": <integer> | null, "stop_loss_price": <float> | null, "take_profit_price": <float> | null, "reason": "<2-4 sentences>", "confidence": "high" | "medium" | "low", "flags": []}}
-
-Flags (add to array as needed): "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
-
-## WHAT YOU NEVER DO
-- Output any text outside the JSON object
-- Trade a symbol not on your watchlist
-- Exceed any hard risk rule even with high confidence
-- Make a trade without a clear, articulable thesis
-- Call search_web() more than twice per cycle
-- Call get_macro_news() — it is pre-fetched and already in your briefing
-- Trade in the first or last 15 minutes of market hours
-- Guess at prices or quantities — use the data from your tools"""
+{watchlist_adjustment_block}"""
 
 
 # ── Briefing Template ──────────────────────────────────────────────────────────
 
-BRIEFING_TEMPLATE = """## MARKET BRIEFING — Cycle {cycle_number}
+BRIEFING_TEMPLATE = """BRIEFING — Cycle {cycle_number}
 
-### Market Snapshot
-{market_snapshot}
+Market: {market_snapshot}
 
-### Macro News (today)
-{macro_news}
+News: {macro_news}
 
-### Watchlist Summary
-{watchlist_summary}
+Watchlist: {watchlist_summary}
 
-### Open Positions with Rationale
-{open_positions}
+Holdings: {open_positions}
 
-### Session Performance
-{session_stats}
+Stats: {session_stats}
 
----
-Based on the above, follow your decision sequence and output your decision as JSON."""
+Decide."""
 
 
 class ContextBuilder:
@@ -236,10 +155,10 @@ class ContextBuilder:
         )
         macro_news = macro_row["summary"] if macro_row else "No macro news available today."
 
-        # Watchlist summary with prices
+        # Watchlist summary (top 5 stocks only, minimal format)
         watchlist_entries = db.query(
-            "SELECT symbol, sector FROM watchlist "
-            "WHERE session_id = ? AND removed_at IS NULL ORDER BY symbol",
+            "SELECT symbol FROM watchlist "
+            "WHERE session_id = ? AND removed_at IS NULL ORDER BY symbol LIMIT 5",
             (self.session_id,),
         )
         watchlist_lines = []
@@ -248,16 +167,14 @@ class ContextBuilder:
                 price_data = get_current_price(entry["symbol"])
                 if "error" not in price_data:
                     watchlist_lines.append(
-                        f"{entry['symbol']:12s} | ₹{price_data['last_price']:>10,.2f} | "
-                        f"{price_data['change_percent']:+.2f}% | "
-                        f"Vol: {price_data['volume']:,} | {entry['sector'] or ''}"
+                        f"{entry['symbol']} ₹{price_data['last_price']:,.0f} {price_data['change_percent']:+.1f}%"
                     )
                 else:
-                    watchlist_lines.append(f"{entry['symbol']:12s} | Price unavailable")
+                    watchlist_lines.append(f"{entry['symbol']} N/A")
             except Exception:
-                watchlist_lines.append(f"{entry['symbol']:12s} | Price unavailable")
+                watchlist_lines.append(f"{entry['symbol']} N/A")
 
-        watchlist_summary = "\n".join(watchlist_lines) or "No watchlist data."
+        watchlist_summary = " | ".join(watchlist_lines) or "No watchlist data."
 
         # Open positions with rationale
         from aaitrade.tools.journal import get_open_positions_with_rationale
@@ -279,20 +196,18 @@ class ContextBuilder:
         else:
             open_positions = "No open positions."
 
-        # Session stats
+        # Session stats (compact format)
         from aaitrade.tools.memory import get_session_summary
         stats = get_session_summary()
         if "error" not in stats:
             session_stats = (
-                f"Day {stats['session_day']} | "
-                f"Capital: ₹{stats['current_capital']:,.2f} | "
-                f"Secured: ₹{stats['secured_profit']:,.2f} | "
-                f"Total P&L: ₹{stats['total_pnl']:,.2f} ({stats['total_pnl_percent']:+.1f}%) | "
-                f"Win rate: {stats['win_rate']}% ({stats['wins']}W/{stats['losses']}L) | "
-                f"Today: {stats['trades_today']} trades, ₹{stats['today_pnl']:,.2f} P&L"
+                f"Capital ₹{stats['current_capital']:,.0f} | "
+                f"P&L {stats['total_pnl_percent']:+.1f}% | "
+                f"W/L {stats['wins']}W/{stats['losses']}L | "
+                f"Today ₹{stats['today_pnl']:,.0f}"
             )
         else:
-            session_stats = "Session stats unavailable."
+            session_stats = "N/A"
 
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
