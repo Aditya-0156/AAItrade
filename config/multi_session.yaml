@@ -7,27 +7,27 @@
 #      (existing sessions auto-recover from DB, new one starts fresh)
 
 sessions:
-  # ── Balanced standard (primary test) ─────────────────────────────────────
+  # ── Balanced standard (Haiku for cost, good enough for most cycles) ──────
   - name: balanced-14d
     capital: 20000
     mode: balanced
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 120  # Increased to 2h to reduce token load
-    model: claude-sonnet-4-6
+    interval: 120
+    # model: claude-haiku-4-5-20251001  (default, ~73% cheaper than Sonnet)
 
-  # ── Aggressive standard (risk testing) ───────────────────────────────────
+  # ── Aggressive standard (Haiku for cost; Sonnet override for complex markets) ─
   - name: aggressive-14d
     capital: 20000
     mode: aggressive
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 120  # Increased to 2h to reduce token load
-    model: claude-sonnet-4-6
+    interval: 120
+    # model: claude-haiku-4-5-20251001  (default, override to claude-sonnet-4-6 if market is complex)
 
-  # ── Safe baseline (cheap, Haiku model) ───────────────────────────────────
+  # ── Safe baseline (rules-based, Haiku is perfect) ──────────────────────
   - name: safe-locked
     capital: 20000
     mode: safe
@@ -35,5 +35,5 @@ sessions:
     days: 14
     watchlist: config/watchlist_seed.yaml
     interval: 120
-    model: claude-haiku-4-5-20251001  # ~80% cheaper, good for safe rules-based trading
     watchlist_adjust: false
+    # model: claude-haiku-4-5-20251001  (default)

@@ -25,7 +25,7 @@ class ClaudeClient:
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-sonnet-4-6",
+        model: str = "claude-haiku-4-5-20251001",  # Default to Haiku for cost (~73% cheaper)
         max_tool_rounds: int = 8,
     ):
         self.client = anthropic.Anthropic(api_key=api_key)
@@ -42,6 +42,7 @@ class ClaudeClient:
         """Run a full decision cycle with tool-use.
 
         Returns the parsed JSON decision from Claude.
+        Uses prompt caching for system prompt to reduce costs ~65%.
         """
         tools = get_tools_for_api()
 
@@ -55,7 +56,13 @@ class ClaudeClient:
                     response = self.client.messages.create(
                         model=self.model,
                         max_tokens=4096,
-                        system=system_prompt,
+                        system=[
+                            {
+                                "type": "text",
+                                "text": system_prompt,
+                                "cache_control": {"type": "ephemeral"}
+                            }
+                        ],
                         tools=tools,
                         messages=messages,
                     )
