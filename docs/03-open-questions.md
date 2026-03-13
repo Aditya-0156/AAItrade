@@ -1,77 +1,43 @@
-# Open Questions Before Coding
+# Open Questions & Decisions Log
 
-Things that need a decision before we write the first line of code.
-Once answered, this file moves to resolved and gets folded into the relevant architecture doc.
+## Resolved ✓
 
----
-
-## Must Resolve Before Coding
-
-### 1. Market Data Source
-How do we get live NSE prices and historical OHLCV?
-
-Options:
-- **Zerodha Kite API** — we already have an account. Provides live quotes, historical data, websocket feed. Most natural choice.
-- **Yahoo Finance (yfinance)** — free, no account needed, but unofficial and unreliable for production
-- **NSE India unofficial API** — free but fragile
-- **Angel One SmartAPI / Upstox** — alternative brokers with free data APIs
-
-**Recommended:** Zerodha Kite for both data AND execution — one integration covers both. Need to check if Kite historical data API is sufficient for indicator computation.
-
-### 2. News Source
-How do we fetch stock-specific news?
-
-Options:
-- **NewsAPI.org** — free tier (100 req/day), easy to use
-- **Google News RSS** — free, no account, scraping-based
-- **MoneyControl / Economic Times scraping** — India-specific but fragile
-- **Zerodha's own news feed** — if available via Kite
-
-**Recommended:** NewsAPI.org to start (free tier is enough for paper phase). Upgrade later if needed.
-
-### 3. Watchlist — Which Stocks?
-Which 15–25 NSE stocks should the initial watchlist contain?
-
-Criteria for selection:
-- High liquidity (easy to buy/sell without slippage)
-- Part of Nifty 50 (well-covered by news, stable)
-- Mix of sectors (not all IT or all banking)
-
-**Decision needed:** Finalize the initial watchlist before first paper run.
-
-### 4. Tech Stack Confirmation
-Based on everything discussed, the natural stack is:
-
-- **Language:** Python 3.11+
-- **Claude integration:** Anthropic Python SDK (tool use)
-- **Broker:** Zerodha Kite Connect Python SDK
-- **Database:** SQLite (via Python `sqlite3` or SQLAlchemy)
-- **Scheduler:** APScheduler or simple `time.sleep` loop
-- **News:** NewsAPI Python client
-- **Indicators:** `pandas-ta` or `ta-lib` (compute RSI, MAs, etc.)
-- **CLI:** `argparse` or `typer` for `start_session` command
-
-Any objections or preferences before this is locked?
-
-### 5. Zerodha API Access
-Zerodha Kite Connect requires:
-- A Kite Connect app (created at developers.kite.trade)
-- API key + secret
-- Daily login token (Zerodha tokens expire daily — this affects the automation)
-
-**The daily token problem:** Zerodha requires a manual login flow each morning to generate a fresh access token. This is a known pain point for automation. Options:
-- Manual login each morning (simple, acceptable for now)
-- Automate login with `selenium` / `playwright` (brittle, against ToS technically)
-- Use a third-party token automation service
-
-**Decision needed:** Accept manual daily login for Phase 1?
+| Decision | Resolved To |
+|---|---|
+| Execution modes | Paper + Live only. Backtest deferred to Phase 2. |
+| Market scope Phase 1 | Indian markets only (NSE/BSE). US deferred. |
+| Broker | Zerodha Kite Connect. Daily token refresh accepted. |
+| Market data source | Zerodha Kite API (covers both data + execution) |
+| News source | NewsAPI.org free tier to start |
+| Decision approach | Hybrid tool-use — lightweight briefing + Claude calls tools on demand |
+| Tool architecture | Expandable registry pattern — new tools added by dropping files in `tools/` |
+| Storage | SQLite Phase 1, Postgres later. No vector DB in Phase 1. |
+| Decision frequency | Every 15 minutes during market hours (9:15 AM – 3:30 PM IST) |
+| Tech stack | Python 3.11+, Anthropic SDK, Kite Connect SDK, SQLite, pandas-ta, NewsAPI |
+| Trading modes | Safe / Balanced / Aggressive — each with distinct risk parameters |
+| Risk rules | Documented in `04-risk-rules.md` |
+| Executor role | Validates + gates every Claude decision before execution. Python always wins. |
+| Profit handling | Aggressive: compound. Safe: harvest. Balanced: 50/50 split. |
+| Tool expandability | Plug-and-play registry — Phase 2+ tools listed in `05-tools-and-expandability.md` |
 
 ---
 
-## Can Decide Later (Post Paper Phase)
+## Still To Resolve Before Coding
 
-- Vector DB for semantic memory (Phase 2)
-- US market integration — Alpaca (Phase 2)
-- Dynamic stock screening — Claude discovers candidates (Phase 2)
-- Web dashboard / UI (Phase 2)
-- Telegram / WhatsApp alerts (Phase 2)
+### 1. System Prompt Draft
+The most important artifact in the system. Needs to be written and agreed on before coding starts. Defines Claude's identity, mode-specific behaviour, output format, hard rules.
+
+### 2. Initial Watchlist
+Which 15–20 NSE stocks to monitor in Phase 1. Criteria: high liquidity, Nifty 50 large caps, sector diversity.
+
+---
+
+## Deferred to Phase 2
+
+- Vector DB for semantic memory
+- US market + Alpaca integration
+- Dynamic stock screening (Claude discovers candidates)
+- Web dashboard / UI
+- Telegram / WhatsApp alerts
+- Backtest mode
+- F&O (options/futures) trading
