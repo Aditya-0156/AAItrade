@@ -33,3 +33,6 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Local reference files (never push)
+SERVER_COMMANDS.md
