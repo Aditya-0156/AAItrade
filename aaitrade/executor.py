@@ -403,7 +403,11 @@ class Executor:
     # ── Helpers ────────────────────────────────────────────────────────────
 
     def _daily_loss_exceeded(self) -> bool:
-        """Check if today's cumulative loss exceeds the daily limit."""
+        """Check if today's cumulative loss exceeds the daily limit.
+
+        Uses today's starting capital from daily_summary if available,
+        otherwise falls back to current_capital.
+        """
         today = db.now_iso()[:10]
         rows = db.query(
             "SELECT SUM(pnl) as total FROM trades "
@@ -412,6 +416,12 @@ class Executor:
         )
         today_pnl = rows[0]["total"] if rows and rows[0]["total"] else 0
 
+        # Use today's opening capital (from daily_summary) for accurate % calculation
+        day_summary = db.query_one(
+            "SELECT starting_capital FROM daily_summary "
+            "WHERE session_id = ? AND date = ? ORDER BY day_number DESC LIMIT 1",
+            (self.session_id, today),
+        )
         session = db.query_one(
             "SELECT current_capital FROM sessions WHERE id = ?",
             (self.session_id,),
@@ -419,7 +429,11 @@ class Executor:
         if not session:
             return False
 
-        loss_pct = abs(today_pnl) / session["current_capital"] * 100 if today_pnl < 0 else 0
+        base_capital = (
+            day_summary["starting_capital"] if day_summary
+            else session["current_capital"]
+        )
+        loss_pct = abs(today_pnl) / base_capital * 100 if today_pnl < 0 else 0
         return loss_pct >= self.rules.daily_loss_limit
 
     def _halt_session(self, reason: str):

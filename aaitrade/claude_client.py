@@ -71,6 +71,17 @@ class ClaudeClient:
                     wait = 15 * (2 ** attempt)  # 15s, 30s, 60s, 120s
                     logger.warning(f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/4")
                     time.sleep(wait)
+                except anthropic.BadRequestError as e:
+                    # Monthly spend limit hit — no point retrying, halt gracefully
+                    if "reached your specified API usage limits" in str(e):
+                        logger.critical(f"Monthly API limit reached: {e}")
+                        return {
+                            "action": "HOLD", "symbol": None, "quantity": None,
+                            "stop_loss_price": None, "take_profit_price": None,
+                            "reason": "Monthly API spend limit reached — session paused until limit resets.",
+                            "confidence": "low", "flags": ["HALT_SESSION"],
+                        }
+                    raise
             else:
                 logger.error("Rate limit retries exhausted — returning HOLD")
                 return {"action": "HOLD", "symbol": None, "quantity": None,
