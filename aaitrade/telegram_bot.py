@@ -40,7 +40,9 @@ class TelegramBot:
         """Call a Telegram Bot API method."""
         url = _BASE.format(token=self.token, method=method)
         try:
-            resp = requests.post(url, json=kwargs, timeout=10)
+            # Use poll_timeout + 2s buffer for getUpdates, 10s for everything else
+            req_timeout = kwargs.get("timeout", 0) + 2 if "timeout" in kwargs else 10
+            resp = requests.post(url, json=kwargs, timeout=req_timeout)
             data = resp.json()
             if not data.get("ok"):
                 logger.warning(f"Telegram API error: {data}")
@@ -128,7 +130,7 @@ class TelegramBot:
                 updates = self._api(
                     "getUpdates",
                     offset=self._last_update_id + 1,
-                    timeout=30,
+                    timeout=8,
                 )
                 if not updates:
                     continue
