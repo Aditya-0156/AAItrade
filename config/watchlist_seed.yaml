@@ -1,0 +1,170 @@
+# AAItrade Default Seed Watchlist
+# Passed at session start via CLI: --watchlist config/watchlist_seed.yaml
+# Can be overridden with a custom file for different sessions.
+# All symbols are NSE-listed. Max watchlist size during a session: 30 stocks.
+
+watchlist:
+
+  # ── TIER 1: Nifty 50 Large Caps (20 stocks) ─────────────────────────────
+  # High liquidity, well-covered by news, stable enough for paper testing.
+
+  - symbol: RELIANCE
+    company: Reliance Industries
+    sector: Energy / Conglomerate
+    notes: Largest Indian company by market cap. Diversified across oil, retail, telecom.
+
+  - symbol: HDFCBANK
+    company: HDFC Bank
+    sector: Banking
+    notes: Largest private sector bank. High liquidity, strong fundamentals.
+
+  - symbol: ICICIBANK
+    company: ICICI Bank
+    sector: Banking
+    notes: Second largest private bank. Strong retail + corporate banking mix.
+
+  - symbol: SBIN
+    company: State Bank of India
+    sector: Banking (PSU)
+    notes: Largest public sector bank. High sensitivity to RBI policy moves.
+
+  - symbol: INFY
+    company: Infosys
+    sector: IT
+    notes: Second largest IT firm. Strong bellwether for Indian IT sector sentiment.
+
+  - symbol: TCS
+    company: Tata Consultancy Services
+    sector: IT
+    notes: Largest IT company. Quarterly results heavily watched by the market.
+
+  - symbol: WIPRO
+    company: Wipro
+    sector: IT
+    notes: Mid-large IT. Good for sector diversification within IT.
+
+  - symbol: TATAMOTORS
+    company: Tata Motors
+    sector: Automobile
+    notes: Covers both domestic auto and JLR (international). EV story.
+
+  - symbol: MARUTI
+    company: Maruti Suzuki
+    sector: Automobile
+    notes: Largest passenger car maker in India. Domestic demand proxy.
+
+  - symbol: SUNPHARMA
+    company: Sun Pharmaceutical
+    sector: Pharma
+    notes: Largest pharma company. Strong US generics + domestic formulations.
+
+  - symbol: DRREDDY
+    company: Dr. Reddy's Laboratories
+    sector: Pharma
+    notes: Major generic drug maker. US FDA news sensitive.
+
+  - symbol: TITAN
+    company: Titan Company
+    sector: Consumer Discretionary
+    notes: Jewellery, watches, eyewear. Premium consumer sentiment proxy.
+
+  - symbol: ASIANPAINT
+    company: Asian Paints
+    sector: Consumer
+    notes: Market leader in paints. Sensitive to real estate and construction cycles.
+
+  - symbol: BAJFINANCE
+    company: Bajaj Finance
+    sector: NBFC / Fintech
+    notes: India's largest NBFC. High growth, high volatility. Consumer credit proxy.
+
+  - symbol: HINDUNILVR
+    company: Hindustan Unilever
+    sector: FMCG
+    notes: Largest FMCG. Defensive stock. Rural demand and inflation sensitive.
+
+  - symbol: NTPC
+    company: NTPC
+    sector: Power (PSU)
+    notes: Largest power utility. Sensitive to energy policy and capex cycles.
+
+  - symbol: ONGC
+    company: Oil & Natural Gas Corporation
+    sector: Energy (PSU)
+    notes: Upstream oil and gas. Sensitive to crude oil prices.
+
+  - symbol: TATASTEEL
+    company: Tata Steel
+    sector: Metals
+    notes: Largest steel maker. China demand and global commodity price sensitive.
+
+  - symbol: ADANIPORTS
+    company: Adani Ports & SEZ
+    sector: Infrastructure / Logistics
+    notes: Largest port operator. Trade volume and capex sensitive.
+
+  - symbol: BHARTIARTL
+    company: Bharti Airtel
+    sector: Telecom
+    notes: Second largest telecom. ARPU growth and 5G rollout story.
+
+  # ── TIER 2: New-Age & High-Growth Listed Companies (10 stocks) ──────────
+  # More volatile, news-driven. Requires closer thesis monitoring.
+  # All NSE-listed as of early 2025.
+
+  - symbol: ETERNAL
+    company: Zomato (Eternal Limited)
+    sector: Food Delivery / Quick Commerce
+    notes: Rebranded to Eternal in 2024. Food delivery + Blinkit quick commerce.
+           High growth but unprofitable. Very news and sentiment sensitive.
+
+  - symbol: SWIGGY
+    company: Swiggy
+    sector: Food Delivery / Quick Commerce
+    notes: IPO November 2024. Direct Zomato competitor. Loss-making, high growth.
+           Volatile — treat with tighter stop-losses.
+
+  - symbol: PAYTM
+    company: Paytm (One97 Communications)
+    sector: Fintech / Digital Payments
+    notes: High volatility. RBI regulatory actions have major price impact.
+           Path to profitability is key thesis to monitor.
+
+  - symbol: NYKAA
+    company: Nykaa (FSN E-Commerce Ventures)
+    sector: Beauty / E-Commerce
+    notes: India's leading beauty platform. Profitable unlike most new-age peers.
+           Sensitive to discretionary spending and D2C brand trends.
+
+  - symbol: POLICYBZR
+    company: PB Fintech (Policybazaar / Paisabazaar)
+    sector: Insurtech / Fintech
+    notes: Insurance and credit marketplace. Growing fast, moving toward profit.
+
+  - symbol: DELHIVERY
+    company: Delhivery
+    sector: Logistics
+    notes: Tech-first logistics company. E-commerce volume proxy.
+           Sensitive to e-commerce GMV trends and operational efficiency news.
+
+  - symbol: OLAELEC
+    company: Ola Electric Mobility
+    sector: EV / Clean Energy
+    notes: India's largest EV two-wheeler maker. High volatility.
+           Policy (FAME subsidy), production, and quality news sensitive.
+
+  - symbol: IXIGO
+    company: Ixigo (Le Travenues Technology)
+    sector: Travel / OTA
+    notes: Online travel platform. Travel demand and tourism sentiment proxy.
+
+  - symbol: NAZARA
+    company: Nazara Technologies
+    sector: Gaming / Media
+    notes: India's leading gaming and esports company. Acquisitive growth model.
+
+  - symbol: HONASA
+    company: Mamaearth (Honasa Consumer)
+    sector: D2C Beauty / FMCG
+    notes: Digital-first personal care brands. Premium D2C segment proxy.
+           Sensitive to digital ad spend and consumer sentiment.
