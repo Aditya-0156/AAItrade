@@ -27,11 +27,11 @@
 
 ## Still To Resolve Before Coding
 
-### 1. System Prompt Draft
-The most important artifact in the system. Needs to be written and agreed on before coding starts. Defines Claude's identity, mode-specific behaviour, output format, hard rules.
+### 1. ~~System Prompt~~ — DONE
+Documented in `07-system-prompt.md`. Watchlist passed as config at session start.
 
-### 2. Initial Watchlist
-Which 15–20 NSE stocks to monitor in Phase 1. Criteria: high liquidity, Nifty 50 large caps, sector diversity.
+### 2. Initial Seed Watchlist
+Which 15–20 NSE stocks to use as the default seed list. Criteria: high liquidity, Nifty 50 large caps, sector diversity. Passed as a config file at session start — not hardcoded.
 
 ---
 
