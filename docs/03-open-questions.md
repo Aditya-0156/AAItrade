@@ -8,7 +8,9 @@
 | Market scope Phase 1 | Indian markets only (NSE/BSE). US deferred. |
 | Broker | Zerodha Kite Connect. Daily token refresh accepted. |
 | Market data source | Zerodha Kite API (covers both data + execution) |
-| News source | NewsAPI.org free tier to start |
+| News source | NewsAPI.org (stock + sector + macro news) + Tavily API (web search) |
+| Trade journal | Full rationale records per trade, thesis tracking across cycles, outcome review |
+| News processing | Summarized via Claude Haiku before storing/sending — never raw articles to Claude |
 | Decision approach | Hybrid tool-use — lightweight briefing + Claude calls tools on demand |
 | Tool architecture | Expandable registry pattern — new tools added by dropping files in `tools/` |
 | Storage | SQLite Phase 1, Postgres later. No vector DB in Phase 1. |

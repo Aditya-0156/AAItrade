@@ -17,12 +17,15 @@ All tools live in a central registry. The Claude client reads from this registry
 
 ```
 tools/
-├── __init__.py          ← tool registry lives here
-├── market.py            ← price, indicators, OHLCV
-├── news.py              ← news fetching and summarization
-├── portfolio.py         ← holdings, cash, P&L queries
-├── memory.py            ← past decisions and trade history
-└── [future tools...]    ← drop new files here to add tools
+├── __init__.py      ← tool registry lives here
+├── market.py        ← price, indicators, OHLCV
+├── news.py          ← stock/sector/macro news fetching + summarization
+├── search.py        ← web search via Tavily
+├── portfolio.py     ← holdings, cash, P&L queries
+├── memory.py        ← session trade history and summary
+├── journal.py       ← trade rationale records and thesis tracking
+├── watchlist.py     ← watchlist management
+└── [future tools...] ← drop new files here to add tools
 ```
 
 ---
@@ -42,7 +45,14 @@ These are the tools Claude has access to at launch:
 ### News Tools (`tools/news.py`)
 | Tool | Parameters | Returns |
 |---|---|---|
-| `get_news` | `symbol`, `hours=24` | Latest N news items, each summarized to 2 lines |
+| `get_stock_news` | `symbol`, `hours=24` | Latest news for a stock, each summarized to 3-5 sentences |
+| `get_sector_news` | `sector` | Sector-wide news summary |
+| `get_macro_news` | — | Pre-fetched at market open, cached all day — global macro headlines |
+
+### Search Tools (`tools/search.py`)
+| Tool | Parameters | Returns |
+|---|---|---|
+| `search_web` | `query` | Clean LLM-friendly summary from Tavily API. Max 2 calls/cycle. |
 
 ### Portfolio Tools (`tools/portfolio.py`)
 | Tool | Parameters | Returns |
@@ -55,6 +65,14 @@ These are the tools Claude has access to at launch:
 |---|---|---|
 | `get_trade_history` | `symbol`, `limit=5` | Past decisions on this stock in current session |
 | `get_session_summary` | — | Running stats: win rate, total P&L, trades today |
+
+### Journal Tools (`tools/journal.py`)
+| Tool | Parameters | Returns |
+|---|---|---|
+| `write_trade_rationale` | `symbol`, `reason`, `news_cited`, `thesis`, `target`, `stop` | Creates rationale record on BUY |
+| `get_open_positions_with_rationale` | — | All open positions with full journal records |
+| `update_thesis` | `symbol`, `note` | Claude adds thesis update each time it reviews a position |
+| `get_closed_trade_history` | `symbol`, `limit` | Past closed trades with outcome vs original thesis |
 
 ### Watchlist Tools (`tools/watchlist.py`)
 | Tool | Parameters | Returns |
