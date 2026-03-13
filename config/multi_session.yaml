@@ -7,33 +7,33 @@
 #      (existing sessions auto-recover from DB, new one starts fresh)
 
 sessions:
-  # ── Balanced standard (Haiku for cost, good enough for most cycles) ──────
+  # ── Balanced standard (4-hour intervals: 9:30 AM, 1:30 PM, 3:30 PM) ──────
   - name: balanced-14d
     capital: 20000
     mode: balanced
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 120
+    interval: 240
     # model: claude-haiku-4-5-20251001  (default, ~73% cheaper than Sonnet)
 
-  # ── Aggressive standard (Haiku for cost; Sonnet override for complex markets) ─
+  # ── Aggressive standard (4-hour intervals) ─────────────────────────────
   - name: aggressive-14d
     capital: 20000
     mode: aggressive
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 120
+    interval: 240
     # model: claude-haiku-4-5-20251001  (default, override to claude-sonnet-4-6 if market is complex)
 
-  # ── Safe baseline (rules-based, Haiku is perfect) ──────────────────────
+  # ── Safe baseline (4-hour intervals) ───────────────────────────────────
   - name: safe-locked
     capital: 20000
     mode: safe
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 120
+    interval: 240
     watchlist_adjust: false
     # model: claude-haiku-4-5-20251001  (default)
