@@ -10,8 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# IST = UTC+5:30
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 from aaitrade import db
 from aaitrade.config import SessionConfig, ExecutionMode, load_watchlist, APIKeys
@@ -216,27 +219,27 @@ class SessionManager:
                     self._complete_session()
                     break
 
-                now = datetime.now()
+                now = datetime.now(_IST)  # Always use IST for market hours
 
                 # Holiday/weekend check
                 if not is_trading_day(now.date()):
-                    logger.info(f"{now.date()} is not a trading day. Sleeping until tomorrow...")
+                    logger.info(f"{now.date()} is not a trading day (IST). Sleeping until tomorrow...")
                     self._sleep_until_tomorrow()
                     continue
 
-                # Pre-market: fetch macro news at 9:00 AM
+                # Pre-market: fetch macro news at 9:00 AM IST
                 if now.hour == 9 and now.minute < 5:
                     logger.info("Pre-market: fetching macro news...")
                     get_macro_news()
 
                 # Market hours: 9:15 AM to 3:30 PM IST
-                market_open = now.replace(hour=9, minute=15, second=0)
-                market_close = now.replace(hour=15, minute=30, second=0)
+                market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+                market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
                 if market_open <= now <= market_close:
                     # Trading window (skip first and last 15 mins as per rules)
-                    safe_open = now.replace(hour=9, minute=30, second=0)
-                    safe_close = now.replace(hour=15, minute=15, second=0)
+                    safe_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+                    safe_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
 
                     if safe_open <= now <= safe_close:
                         self._run_cycle()
@@ -255,8 +258,8 @@ class SessionManager:
             self._complete_session()
 
     def _sleep_until_tomorrow(self):
-        """Sleep until 8:55 AM next day."""
-        now = datetime.now()
+        """Sleep until 8:55 AM IST next day."""
+        now = datetime.now(_IST)
         tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
         sleep_secs = (tomorrow_morning - now).total_seconds()
         if sleep_secs > 0:
