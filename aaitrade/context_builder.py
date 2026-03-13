@@ -53,22 +53,28 @@ YOUR WATCHLIST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DECISION PROCESS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Review open positions: is thesis still valid? Call update_thesis(symbol, note) to record assessment.
-2. Scan market briefing for 1-3 new ideas.
-3. For candidates: gather news (get_stock_news), indicators (get_indicators), sector context (get_sector_news). Search (max 2 calls) only if needed.
-4. Make decision: BUY / SELL / HOLD. Must have clear thesis. Quality over quantity—HOLD is often right.
-5. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
+1. Call get_session_memory() to recall what you were watching and your goals from last cycle.
+2. Review open positions: is thesis still valid? Call update_thesis(symbol, note) to record assessment.
+3. Scan market briefing for 1-3 new ideas.
+4. For candidates: gather news (get_stock_news), indicators (get_indicators), sector context (get_sector_news). Search (max 2 calls) only if needed.
+5. Make decisions: you can BUY/SELL multiple stocks in one cycle — output one object per decision.
+6. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
+7. Call update_session_memory() with what you observed, decisions made, next-cycle goals, stocks to watch. Max 2400 chars.
 
 {watchlist_adjustment_block}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUTPUT (strict JSON format)
+OUTPUT (strict JSON array format)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{{"action": "BUY" | "SELL" | "HOLD", "symbol": "<NSE_SYMBOL>" | null, "quantity": <int> | null, "stop_loss_price": <float> | null, "take_profit_price": <float> | null, "reason": "<2-3 sentences>", "confidence": "high" | "medium" | "low", "flags": []}}
+Output a JSON array with one object per decision. If no trades, output a single HOLD. Examples:
+
+One HOLD: [{{"action": "HOLD", "symbol": null, "quantity": null, "stop_loss_price": null, "take_profit_price": null, "reason": "<why>", "confidence": "low", "flags": []}}]
+
+Multiple trades: [{{"action": "BUY", "symbol": "RELIANCE", "quantity": 5, "stop_loss_price": 2800.0, "take_profit_price": 3100.0, "reason": "<thesis>", "confidence": "high", "flags": []}}, {{"action": "SELL", "symbol": "TCS", "quantity": 10, "stop_loss_price": null, "take_profit_price": null, "reason": "<why selling>", "confidence": "high", "flags": []}}]
 
 Flags: "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
 
-Output JSON only—no markdown, explanation, or text outside the object."""
+Output JSON array only — no markdown, explanation, or text outside the array."""
 
 
 # ── Briefing Template ──────────────────────────────────────────────────────────

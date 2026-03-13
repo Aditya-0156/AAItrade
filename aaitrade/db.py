@@ -192,6 +192,14 @@ CREATE TABLE IF NOT EXISTS watchlist (
     remove_reason   TEXT,
     UNIQUE(session_id, symbol, added_at)
 );
+
+CREATE TABLE IF NOT EXISTS session_memory (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id) UNIQUE,
+    content         TEXT NOT NULL,          -- Claude's self-maintained memory blob
+    updated_at      TEXT NOT NULL,
+    cycle_number    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 

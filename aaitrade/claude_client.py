@@ -75,18 +75,17 @@ class ClaudeClient:
                     # Monthly spend limit hit — no point retrying, halt gracefully
                     if "reached your specified API usage limits" in str(e):
                         logger.critical(f"Monthly API limit reached: {e}")
-                        return {
-                            "action": "HOLD", "symbol": None, "quantity": None,
-                            "stop_loss_price": None, "take_profit_price": None,
-                            "reason": "Monthly API spend limit reached — session paused until limit resets.",
-                            "confidence": "low", "flags": ["HALT_SESSION"],
-                        }
+                        return [{"action": "HOLD", "symbol": None, "quantity": None,
+                                 "stop_loss_price": None, "take_profit_price": None,
+                                 "reason": "Monthly API spend limit reached — session paused until limit resets.",
+                                 "confidence": "low", "flags": ["HALT_SESSION"]}]
                     raise
             else:
                 logger.error("Rate limit retries exhausted — returning HOLD")
-                return {"action": "HOLD", "symbol": None, "quantity": None,
-                        "stop_loss_price": None, "take_profit_price": None,
-                        "reason": "Rate limit — too many concurrent sessions", "confidence": "low", "flags": []}
+                return [{"action": "HOLD", "symbol": None, "quantity": None,
+                         "stop_loss_price": None, "take_profit_price": None,
+                         "reason": "Rate limit — too many concurrent sessions",
+                         "confidence": "low", "flags": []}]
 
             # Check if Claude wants to use tools
             if response.stop_reason == "tool_use":
@@ -134,24 +133,26 @@ class ClaudeClient:
                     if hasattr(block, "text"):
                         decision_text += block.text
 
-                # Parse JSON decision
-                decision = self._parse_decision(decision_text)
+                # Parse JSON decisions (returns list)
+                decisions = self._parse_decision(decision_text)
 
-                # Log the decision
-                db.insert("decisions", {
-                    "session_id": session_id,
-                    "cycle_number": cycle_number,
-                    "action": decision.get("action", "PARSE_ERROR"),
-                    "symbol": decision.get("symbol"),
-                    "quantity": decision.get("quantity"),
-                    "reason": decision.get("reason", ""),
-                    "confidence": decision.get("confidence", ""),
-                    "flags": json.dumps(decision.get("flags", [])),
-                    "raw_json": decision_text,
-                    "decided_at": db.now_iso(),
-                })
+                # Log each decision to DB
+                now = db.now_iso()
+                for dec in decisions:
+                    db.insert("decisions", {
+                        "session_id": session_id,
+                        "cycle_number": cycle_number,
+                        "action": dec.get("action", "PARSE_ERROR"),
+                        "symbol": dec.get("symbol"),
+                        "quantity": dec.get("quantity"),
+                        "reason": dec.get("reason", ""),
+                        "confidence": dec.get("confidence", ""),
+                        "flags": json.dumps(dec.get("flags", [])),
+                        "raw_json": decision_text,
+                        "decided_at": now,
+                    })
 
-                return decision
+                return decisions
 
             else:
                 logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
@@ -159,50 +160,51 @@ class ClaudeClient:
 
         # If we exhaust tool rounds, return a HOLD
         logger.warning(f"Cycle {cycle_number}: exhausted {self.max_tool_rounds} tool rounds")
-        return {
-            "action": "HOLD",
-            "symbol": None,
-            "quantity": None,
-            "stop_loss_price": None,
-            "take_profit_price": None,
-            "reason": "Exhausted tool call budget without reaching a decision.",
-            "confidence": "low",
-            "flags": [],
-        }
+        return [{"action": "HOLD", "symbol": None, "quantity": None,
+                 "stop_loss_price": None, "take_profit_price": None,
+                 "reason": "Exhausted tool call budget without reaching a decision.",
+                 "confidence": "low", "flags": []}]
 
-    def _parse_decision(self, text: str) -> dict:
-        """Parse Claude's JSON output into a decision dict."""
+    def _parse_decision(self, text: str) -> list[dict]:
+        """Parse Claude's JSON output into a list of decision dicts."""
         text = text.strip()
 
-        # Try to extract JSON from the text
-        # Claude should output only JSON, but handle edge cases
+        def _wrap(obj) -> list[dict]:
+            """Ensure result is always a list."""
+            if isinstance(obj, list):
+                return obj
+            if isinstance(obj, dict):
+                return [obj]
+            return []
+
+        # Direct parse — handles both [...] and {...}
         try:
-            # Direct parse
-            return json.loads(text)
+            parsed = json.loads(text)
+            result = _wrap(parsed)
+            if result:
+                return result
         except json.JSONDecodeError:
             pass
 
-        # Try to find JSON in the text (between { and })
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
+        # Try to find a JSON array first, then an object
+        for start_char, end_char in [("[", "]"), ("{", "}")]:
+            start = text.find(start_char)
+            end = text.rfind(end_char) + 1
+            if start >= 0 and end > start:
+                try:
+                    parsed = json.loads(text[start:end])
+                    result = _wrap(parsed)
+                    if result:
+                        return result
+                except json.JSONDecodeError:
+                    pass
 
         # Parse failure — return error HOLD
         logger.error(f"Failed to parse Claude output as JSON: {text[:200]}")
-        return {
-            "action": "HOLD",
-            "symbol": None,
-            "quantity": None,
-            "stop_loss_price": None,
-            "take_profit_price": None,
-            "reason": f"PARSE ERROR: Could not parse Claude output as JSON.",
-            "confidence": "low",
-            "flags": ["ALERT_USER"],
-        }
+        return [{"action": "HOLD", "symbol": None, "quantity": None,
+                 "stop_loss_price": None, "take_profit_price": None,
+                 "reason": "PARSE ERROR: Could not parse Claude output as JSON.",
+                 "confidence": "low", "flags": ["ALERT_USER"]}]
 
     def generate_eod_summary(
         self,

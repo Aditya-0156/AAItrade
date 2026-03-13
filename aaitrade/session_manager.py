@@ -100,11 +100,12 @@ class SessionManager:
             disable_tool("remove_from_watchlist")
 
         # Inject session_id into tool modules that need it
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)
         journal.set_session_id(self.session_id)
         watchlist_tools.set_session_id(self.session_id)
+        session_memory.set_session_id(self.session_id)
 
         # Initialize clients
         self._init_clients()
@@ -301,43 +302,53 @@ class SessionManager:
         system_prompt = self.context.build_system_prompt()
         briefing = self.context.build_briefing(self.cycle_count)
 
-        # Get Claude's decision
-        decision = self.claude.make_decision(
+        # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
+        decisions = self.claude.make_decision(
             system_prompt=system_prompt,
             briefing=briefing,
             session_id=self.session_id,
             cycle_number=self.cycle_count,
         )
 
-        logger.info(
-            f"Decision: {decision.get('action', 'N/A')} "
-            f"{decision.get('symbol', '')} "
-            f"[{decision.get('confidence', '')}]"
-        )
-        logger.info(f"Reason: {decision.get('reason', 'N/A')}")
+        logger.info(f"Received {len(decisions)} decision(s) from Claude")
 
-        # Execute the decision
-        result = self.executor.execute(decision)
-        logger.info(f"Result: {result.get('status', 'unknown')}")
-
-        # Send Telegram notification for executed trades
+        # Execute each decision in sequence
         bot = get_bot()
-        if bot and result.get("status") == "executed":
-            bot.send_trade_alert(
-                action=decision.get("action", ""),
-                symbol=decision.get("symbol", ""),
-                quantity=result.get("quantity", 0),
-                price=result.get("price", 0),
-                reason=decision.get("reason", ""),
-                pnl=result.get("pnl"),
-                mode=result.get("mode", "paper"),
+        for decision in decisions:
+            logger.info(
+                f"Decision: {decision.get('action', 'N/A')} "
+                f"{decision.get('symbol', '')} "
+                f"[{decision.get('confidence', '')}]"
             )
+            logger.info(f"Reason: {decision.get('reason', 'N/A')}")
 
-        if result.get("status") == "halted":
-            logger.info("Session halted by executor.")
-            bot = get_bot()
-            if bot:
-                bot.send_halt_alert(result.get("reason", "Unknown"), self.session_id)
+            # Check for HALT_SESSION flag — stop processing further decisions
+            if "HALT_SESSION" in decision.get("flags", []):
+                logger.warning("HALT_SESSION flag received — halting session")
+                self.executor._halt_session(decision.get("reason", "Claude requested halt"))
+                if bot:
+                    bot.send_halt_alert(decision.get("reason", "Claude requested halt"), self.session_id)
+                return
+
+            result = self.executor.execute(decision)
+            logger.info(f"Result: {result.get('status', 'unknown')}")
+
+            if bot and result.get("status") == "executed":
+                bot.send_trade_alert(
+                    action=decision.get("action", ""),
+                    symbol=decision.get("symbol", ""),
+                    quantity=result.get("quantity", 0),
+                    price=result.get("price", 0),
+                    reason=decision.get("reason", ""),
+                    pnl=result.get("pnl"),
+                    mode=result.get("mode", "paper"),
+                )
+
+            if result.get("status") == "halted":
+                logger.info("Session halted by executor.")
+                if bot:
+                    bot.send_halt_alert(result.get("reason", "Unknown"), self.session_id)
+                return  # Stop processing further decisions if session halted
 
     def _end_of_day(self):
         """Run end-of-day processing."""
