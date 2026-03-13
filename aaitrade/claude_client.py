@@ -29,7 +29,7 @@ class ClaudeClient:
         max_tool_rounds: int = 8,
     ):
         self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = model
+        self.model = model  # Can be overridden per-session via config
         self.max_tool_rounds = max_tool_rounds
 
     def make_decision(

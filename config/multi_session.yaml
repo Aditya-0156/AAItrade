@@ -7,57 +7,33 @@
 #      (existing sessions auto-recover from DB, new one starts fresh)
 
 sessions:
-  # ── Conservative long-term ──────────────────────────────────────────────
-  - name: safe-14d
-    capital: 20000
-    mode: safe
-    execution: paper
-    days: 14
-    watchlist: config/watchlist_seed.yaml
-    interval: 60
-
-  # ── Balanced standard ───────────────────────────────────────────────────
+  # ── Balanced standard (primary test) ─────────────────────────────────────
   - name: balanced-14d
     capital: 20000
     mode: balanced
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 60
+    interval: 120  # Increased to 2h to reduce token load
+    model: claude-sonnet-4-6
 
-  # ── Balanced shorter sprint ─────────────────────────────────────────────
-  - name: balanced-7d
-    capital: 20000
-    mode: balanced
-    execution: paper
-    days: 7
-    watchlist: config/watchlist_seed.yaml
-    interval: 60
-
-  # ── Aggressive standard ─────────────────────────────────────────────────
+  # ── Aggressive standard (risk testing) ───────────────────────────────────
   - name: aggressive-14d
     capital: 20000
     mode: aggressive
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 60
+    interval: 120  # Increased to 2h to reduce token load
+    model: claude-sonnet-4-6
 
-  # ── Aggressive short sprint ─────────────────────────────────────────────
-  - name: aggressive-7d
-    capital: 20000
-    mode: aggressive
-    execution: paper
-    days: 7
-    watchlist: config/watchlist_seed.yaml
-    interval: 60
-
-  # ── Safe no watchlist adjustment (pure rules-based) ─────────────────────
+  # ── Safe baseline (cheap, Haiku model) ───────────────────────────────────
   - name: safe-locked
     capital: 20000
     mode: safe
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 60
+    interval: 120
+    model: claude-haiku-4-5-20251001  # ~80% cheaper, good for safe rules-based trading
     watchlist_adjust: false

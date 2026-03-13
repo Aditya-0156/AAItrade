@@ -124,9 +124,11 @@ class SessionManager:
 
     def _init_clients(self):
         """Initialize API clients."""
-        # Claude client
+        # Claude client (use model from config if specified)
+        model = getattr(self.config, 'model', 'claude-sonnet-4-6')
         self.claude = ClaudeClient(
             api_key=self.keys.anthropic,
+            model=model,
             max_tool_rounds=self.config.max_tool_calls_per_cycle,
         )
 

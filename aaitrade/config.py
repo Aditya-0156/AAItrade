@@ -157,6 +157,7 @@ class SessionConfig:
     decision_interval_minutes: int = 15
     max_tool_calls_per_cycle: int = 8
     max_web_searches_per_cycle: int = 2
+    model: str = "claude-sonnet-4-6"  # Can be overridden per-session
 
     # Derived
     risk_rules: RiskRules = field(init=False)
