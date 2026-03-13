@@ -1,0 +1,39 @@
+[project]
+name = "aaitrade"
+version = "0.1.0"
+description = "Autonomous AI-powered stock trading system for Indian (NSE/BSE) markets. Claude is the decision-making brain."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "anthropic>=0.40.0",
+    "kiteconnect>=5.0.0",
+    "pandas>=2.0.0",
+    "pandas-ta>=0.3.14b",
+    "newsapi-python>=0.2.7",
+    "tavily-python>=0.5.0",
+    "pyyaml>=6.0",
+    "apscheduler>=3.10.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+aaitrade = "aaitrade.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
