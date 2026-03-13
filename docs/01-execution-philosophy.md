@@ -1,14 +1,14 @@
 # Execution Philosophy & Testing Strategy
 
-## Three Execution Modes
+## Two Execution Modes
 
-AAItrade will support three distinct execution modes, selectable at runtime:
+AAItrade will support two execution modes, selectable at runtime:
 
 ### 1. Paper Mode (Simulation)
 - No real orders placed. Ever.
 - System makes decisions exactly as it would in live mode
 - All trades recorded in a local ledger with timestamps, prices, P&L
-- Uses real market data (live or historical) for prices
+- Uses real market data for prices
 - Purpose: validate Claude's decision quality before risking capital
 - **This is the starting point. Minimum 2 weeks of paper runs before any live money.**
 
@@ -18,10 +18,7 @@ AAItrade will support three distinct execution modes, selectable at runtime:
 - Will start with small amounts (e.g. ₹10,000) — learning is the priority, not profit
 - Risk guardrails enforced in code, not just in Claude's reasoning
 
-### 3. Backtest Mode (Historical Replay)
-- Feed historical OHLCV data as if it were live
-- System runs through past periods and records hypothetical performance
-- Useful for evaluating strategies before paper trading
+> Backtest mode (historical replay) is out of scope for Phase 1. It can be added later once the core system is stable and there are strategy variations worth comparing.
 
 ---
 
