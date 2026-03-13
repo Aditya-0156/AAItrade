@@ -14,7 +14,7 @@ sessions:
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
 
   # ── Balanced standard ───────────────────────────────────────────────────
   - name: balanced-14d
@@ -23,7 +23,7 @@ sessions:
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
 
   # ── Balanced shorter sprint ─────────────────────────────────────────────
   - name: balanced-7d
@@ -32,7 +32,7 @@ sessions:
     execution: paper
     days: 7
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
 
   # ── Aggressive standard ─────────────────────────────────────────────────
   - name: aggressive-14d
@@ -41,7 +41,7 @@ sessions:
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
 
   # ── Aggressive short sprint ─────────────────────────────────────────────
   - name: aggressive-7d
@@ -50,7 +50,7 @@ sessions:
     execution: paper
     days: 7
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
 
   # ── Safe no watchlist adjustment (pure rules-based) ─────────────────────
   - name: safe-locked
@@ -59,5 +59,5 @@ sessions:
     execution: paper
     days: 14
     watchlist: config/watchlist_seed.yaml
-    interval: 15
+    interval: 60
     watchlist_adjust: false

@@ -50,7 +50,7 @@ def _build_config(entry: dict[str, Any]) -> SessionConfig:
         total_days=int(entry.get("days", 14)),
         watchlist_path=Path(entry.get("watchlist", "config/watchlist_seed.yaml")),
         allow_watchlist_adjustment=entry.get("watchlist_adjust", True),
-        decision_interval_minutes=int(entry.get("interval", 15)),
+        decision_interval_minutes=int(entry.get("interval", 60)),
     )
 
 
