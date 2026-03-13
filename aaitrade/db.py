@@ -52,6 +52,7 @@ def init_db():
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT,                   -- human-readable session name (from multi_session.yaml)
     execution_mode  TEXT NOT NULL,          -- paper / live
     trading_mode    TEXT NOT NULL,          -- safe / balanced / aggressive
     starting_capital REAL NOT NULL,

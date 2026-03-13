@@ -2,6 +2,7 @@
 
 Handles session lifecycle: start, run decision cycles on schedule,
 check stop/loss conditions, end-of-day processing, session completion.
+Integrates: holiday calendar, pause/resume, Telegram notifications.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ from aaitrade.config import SessionConfig, ExecutionMode, load_watchlist, APIKey
 from aaitrade.claude_client import ClaudeClient
 from aaitrade.context_builder import ContextBuilder
 from aaitrade.executor import Executor
+from aaitrade.holidays import is_trading_day
 from aaitrade.reporter import Reporter
+from aaitrade.telegram_bot import get_bot
 from aaitrade.tools import load_all_tools, disable_tool
 from aaitrade.tools.news import get_macro_news
 
@@ -27,11 +30,13 @@ logger = logging.getLogger(__name__)
 class SessionManager:
     """Manages a complete trading session."""
 
-    def __init__(self, config: SessionConfig, keys: APIKeys):
+    def __init__(self, config: SessionConfig, keys: APIKeys, name: str | None = None):
         self.config = config
         self.keys = keys
+        self.name = name  # human-readable name (e.g. "balanced-14d")
         self.session_id: int | None = None
         self.cycle_count = 0
+        self._recovered = False  # set True by multi_session recovery
 
     def start(self):
         """Initialize and start a new trading session."""
@@ -47,6 +52,7 @@ class SessionManager:
 
         # Create session record
         self.session_id = db.insert("sessions", {
+            "name": self.name,
             "execution_mode": self.config.execution_mode.value,
             "trading_mode": self.config.trading_mode.value,
             "starting_capital": self.config.starting_capital,
@@ -99,6 +105,17 @@ class SessionManager:
 
         # Initialize clients
         self._init_clients()
+
+        # Notify via Telegram
+        bot = get_bot()
+        if bot:
+            bot.send(
+                f"🚀 *New Session Started*\n"
+                f"ID: {self.session_id}\n"
+                f"Mode: {self.config.execution_mode.value}/{self.config.trading_mode.value}\n"
+                f"Capital: ₹{self.config.starting_capital:,.2f}\n"
+                f"Duration: {self.config.total_days} days"
+            )
 
         logger.info(f"Session {self.session_id} started successfully")
 
@@ -177,9 +194,22 @@ class SessionManager:
                     "SELECT status, current_day, total_days FROM sessions WHERE id = ?",
                     (self.session_id,),
                 )
-                if not session or session["status"] != "active":
-                    logger.info("Session is no longer active.")
+                if not session:
+                    logger.info("Session record not found.")
                     break
+
+                status = session["status"]
+
+                # Handle halted/completed
+                if status in ("halted", "completed"):
+                    logger.info(f"Session is {status}.")
+                    break
+
+                # Handle paused — just sleep and re-check
+                if status == "paused":
+                    logger.debug("Session paused, waiting...")
+                    time.sleep(30)
+                    continue
 
                 if session["current_day"] > session["total_days"]:
                     logger.info("Session duration complete.")
@@ -187,6 +217,12 @@ class SessionManager:
                     break
 
                 now = datetime.now()
+
+                # Holiday/weekend check
+                if not is_trading_day(now.date()):
+                    logger.info(f"{now.date()} is not a trading day. Sleeping until tomorrow...")
+                    self._sleep_until_tomorrow()
+                    continue
 
                 # Pre-market: fetch macro news at 9:00 AM
                 if now.hour == 9 and now.minute < 5:
@@ -218,8 +254,25 @@ class SessionManager:
             logger.info("Session interrupted by user.")
             self._complete_session()
 
+    def _sleep_until_tomorrow(self):
+        """Sleep until 8:55 AM next day."""
+        now = datetime.now()
+        tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+        sleep_secs = (tomorrow_morning - now).total_seconds()
+        if sleep_secs > 0:
+            logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours until next morning")
+            time.sleep(sleep_secs)
+
     def _run_cycle(self):
         """Run a single decision cycle."""
+        # Re-check session status (may have been paused/stopped via Telegram)
+        session_check = db.query_one(
+            "SELECT status FROM sessions WHERE id = ?",
+            (self.session_id,),
+        )
+        if not session_check or session_check["status"] != "active":
+            return
+
         self.cycle_count += 1
         logger.info(f"{'─' * 40}")
         logger.info(f"Decision cycle {self.cycle_count}")
@@ -234,6 +287,9 @@ class SessionManager:
             if drawdown >= self.config.risk_rules.session_stop_loss:
                 logger.critical(f"Session drawdown at {drawdown:.1f}% — halting session")
                 self.executor._halt_session("Session stop-loss reached")
+                bot = get_bot()
+                if bot:
+                    bot.send_halt_alert("Session stop-loss reached", self.session_id)
                 return
 
         # Build system prompt and briefing
@@ -259,8 +315,24 @@ class SessionManager:
         result = self.executor.execute(decision)
         logger.info(f"Result: {result.get('status', 'unknown')}")
 
+        # Send Telegram notification for executed trades
+        bot = get_bot()
+        if bot and result.get("status") == "executed":
+            bot.send_trade_alert(
+                action=decision.get("action", ""),
+                symbol=decision.get("symbol", ""),
+                quantity=result.get("quantity", 0),
+                price=result.get("price", 0),
+                reason=decision.get("reason", ""),
+                pnl=result.get("pnl"),
+                mode=result.get("mode", "paper"),
+            )
+
         if result.get("status") == "halted":
             logger.info("Session halted by executor.")
+            bot = get_bot()
+            if bot:
+                bot.send_halt_alert(result.get("reason", "Unknown"), self.session_id)
 
     def _end_of_day(self):
         """Run end-of-day processing."""
@@ -270,7 +342,12 @@ class SessionManager:
         self._check_stop_loss_triggers()
 
         # Generate EOD report
-        self.reporter.generate_daily_summary()
+        summary = self.reporter.generate_daily_summary()
+
+        # Send via Telegram
+        bot = get_bot()
+        if bot and summary:
+            bot.send_daily_summary(summary)
 
         # Increment day
         session = db.query_one(
@@ -309,7 +386,16 @@ class SessionManager:
                     "confidence": "high",
                     "flags": [],
                 }
-                self.executor.execute(decision)
+                result = self.executor.execute(decision)
+
+                bot = get_bot()
+                if bot and result.get("status") == "executed":
+                    bot.send_trade_alert(
+                        action="SELL", symbol=pos["symbol"],
+                        quantity=pos["quantity"], price=current_price,
+                        reason="Stop-loss triggered", pnl=result.get("pnl"),
+                        mode=result.get("mode", "paper"),
+                    )
 
             # Take-profit hit
             elif pos["take_profit_price"] and current_price >= pos["take_profit_price"]:
@@ -322,7 +408,16 @@ class SessionManager:
                     "confidence": "high",
                     "flags": [],
                 }
-                self.executor.execute(decision)
+                result = self.executor.execute(decision)
+
+                bot = get_bot()
+                if bot and result.get("status") == "executed":
+                    bot.send_trade_alert(
+                        action="SELL", symbol=pos["symbol"],
+                        quantity=pos["quantity"], price=current_price,
+                        reason="Take-profit triggered", pnl=result.get("pnl"),
+                        mode=result.get("mode", "paper"),
+                    )
 
     def _complete_session(self):
         """Mark the session as completed."""
@@ -333,4 +428,9 @@ class SessionManager:
         logger.info("Session completed.")
 
         # Final summary
-        self.reporter.generate_session_report()
+        report = self.reporter.generate_session_report()
+
+        # Send via Telegram
+        bot = get_bot()
+        if bot and report:
+            bot.send_session_report(report)

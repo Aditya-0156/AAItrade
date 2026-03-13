@@ -1,0 +1,63 @@
+# Multi-session configuration for AAItrade
+# Run with: aaitrade --multi config/multi_session.yaml
+#
+# To add a new session while running:
+#   1. Add it here
+#   2. Restart: aaitrade --multi config/multi_session.yaml
+#      (existing sessions auto-recover from DB, new one starts fresh)
+
+sessions:
+  # ── Conservative long-term ──────────────────────────────────────────────
+  - name: safe-14d
+    capital: 20000
+    mode: safe
+    execution: paper
+    days: 14
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+
+  # ── Balanced standard ───────────────────────────────────────────────────
+  - name: balanced-14d
+    capital: 20000
+    mode: balanced
+    execution: paper
+    days: 14
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+
+  # ── Balanced shorter sprint ─────────────────────────────────────────────
+  - name: balanced-7d
+    capital: 20000
+    mode: balanced
+    execution: paper
+    days: 7
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+
+  # ── Aggressive standard ─────────────────────────────────────────────────
+  - name: aggressive-14d
+    capital: 20000
+    mode: aggressive
+    execution: paper
+    days: 14
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+
+  # ── Aggressive short sprint ─────────────────────────────────────────────
+  - name: aggressive-7d
+    capital: 20000
+    mode: aggressive
+    execution: paper
+    days: 7
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+
+  # ── Safe no watchlist adjustment (pure rules-based) ─────────────────────
+  - name: safe-locked
+    capital: 20000
+    mode: safe
+    execution: paper
+    days: 14
+    watchlist: config/watchlist_seed.yaml
+    interval: 15
+    watchlist_adjust: false

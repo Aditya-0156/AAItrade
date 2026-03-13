@@ -182,6 +182,8 @@ class APIKeys:
     kite_access_token: str
     newsapi: str
     tavily: str
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     @classmethod
     def from_env(cls) -> APIKeys:
@@ -192,4 +194,6 @@ class APIKeys:
             kite_access_token=os.environ.get("KITE_ACCESS_TOKEN", ""),
             newsapi=os.environ.get("NEWSAPI_KEY", ""),
             tavily=os.environ.get("TAVILY_API_KEY", ""),
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+            telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
         )
