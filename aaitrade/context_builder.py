@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 from aaitrade import db
 from aaitrade.config import SessionConfig
@@ -196,7 +198,7 @@ class ContextBuilder:
             secured_profit=session["secured_profit"] if session else 0,
             current_day=session["current_day"] if session else 1,
             total_days=self.config.total_days,
-            current_time=datetime.now().strftime("%I:%M %p"),
+            current_time=datetime.now(_IST).strftime("%I:%M %p IST"),
             mode_mandate=self.config.mode_mandate,
             max_per_trade=rules.max_per_trade,
             stop_loss=rules.stop_loss,
