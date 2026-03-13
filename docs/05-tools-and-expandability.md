@@ -56,6 +56,33 @@ These are the tools Claude has access to at launch:
 | `get_trade_history` | `symbol`, `limit=5` | Past decisions on this stock in current session |
 | `get_session_summary` | — | Running stats: win rate, total P&L, trades today |
 
+### Watchlist Tools (`tools/watchlist.py`)
+| Tool | Parameters | Returns |
+|---|---|---|
+| `get_watchlist` | — | Current watchlist with sector tags |
+| `add_to_watchlist` | `symbol`, `reason` | Success/failure + validation result |
+| `remove_from_watchlist` | `symbol`, `reason` | Success/failure |
+
+These tools are only available to Claude when **watchlist adjustment is enabled** in session config. When disabled, Claude cannot modify the watchlist at all — it only sees `get_watchlist`.
+
+#### Watchlist Adjustment Setting
+```
+session config:
+  allow_watchlist_adjustment: true | false  (default: true)
+```
+
+When `false`: `add_to_watchlist` and `remove_from_watchlist` are not registered — Claude never even sees them.
+When `true`: Claude can adjust the watchlist **only at end-of-day**, not mid-cycle. The system prompt enforces this timing constraint.
+
+#### Guardrails on `add_to_watchlist`
+Before adding a stock, the tool validates:
+- Symbol exists on NSE
+- Minimum market cap (large/mid cap only — no penny stocks or illiquid small caps)
+- Minimum average daily volume threshold
+- Watchlist has not exceeded max size cap (default: 30 stocks)
+
+If any check fails, the stock is rejected and Claude is told why. Claude cannot bypass these checks.
+
 ---
 
 ## Phase 2+ Tools (planned, not built yet)

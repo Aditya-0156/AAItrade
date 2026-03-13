@@ -14,6 +14,7 @@
 | Storage | SQLite Phase 1, Postgres later. No vector DB in Phase 1. |
 | Decision frequency | Every 15 minutes during market hours (9:15 AM – 3:30 PM IST) |
 | Tech stack | Python 3.11+, Anthropic SDK, Kite Connect SDK, SQLite, pandas-ta, NewsAPI |
+| Watchlist strategy | Fixed seed list (20 Nifty 50 large caps), Claude-adjustable via tools, toggleable setting, guardrails on adds |
 | Trading modes | Safe / Balanced / Aggressive — each with distinct risk parameters |
 | Risk rules | Documented in `04-risk-rules.md` |
 | Executor role | Validates + gates every Claude decision before execution. Python always wins. |
