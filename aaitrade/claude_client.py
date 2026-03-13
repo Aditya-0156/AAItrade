@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 
 import anthropic
@@ -48,13 +49,26 @@ class ClaudeClient:
 
         # Tool-use loop: Claude may call tools multiple times before deciding
         for round_num in range(self.max_tool_rounds):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                tools=tools,
-                messages=messages,
-            )
+            # Retry on rate limit with exponential backoff
+            for attempt in range(4):
+                try:
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=4096,
+                        system=system_prompt,
+                        tools=tools,
+                        messages=messages,
+                    )
+                    break
+                except anthropic.RateLimitError:
+                    wait = 15 * (2 ** attempt)  # 15s, 30s, 60s, 120s
+                    logger.warning(f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/4")
+                    time.sleep(wait)
+            else:
+                logger.error("Rate limit retries exhausted — returning HOLD")
+                return {"action": "HOLD", "symbol": None, "quantity": None,
+                        "stop_loss_price": None, "take_profit_price": None,
+                        "reason": "Rate limit — too many concurrent sessions", "confidence": "low", "flags": []}
 
             # Check if Claude wants to use tools
             if response.stop_reason == "tool_use":

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -76,9 +77,14 @@ class MultiSessionRunner:
 
         logger.info(f"Loading {len(configs)} sessions from config")
 
-        for entry in configs:
+        for i, entry in enumerate(configs):
             name = entry.get("name", f"session-{len(self._threads) + 1}")
             config = _build_config(entry)
+
+            # Stagger launches by 30s to avoid hitting Claude rate limits
+            if i > 0:
+                logger.info(f"Waiting 30s before starting '{name}' (rate limit stagger)...")
+                time.sleep(30)
 
             # Check if this named session is already active/paused in DB
             existing = db.query_one(
