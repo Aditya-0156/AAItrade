@@ -376,6 +376,73 @@ class TestMarketTools:
         assert result["nifty_50"]["last_price"] == pytest.approx(22000.0)
         assert result["source"] == "kite"
 
+    def test_instrument_cache_built_on_set_kite_client(self, in_memory_db):
+        """set_kite_client() builds symbol->token cache from instruments list."""
+        from aaitrade.tools import market
+
+        mock_kite = _make_mock_kite()
+        market.set_kite_client(mock_kite)
+
+        # Cache should be populated
+        assert "RELIANCE" in market._instrument_token_cache
+        assert market._instrument_token_cache["RELIANCE"] == 738561
+        assert "INFY" in market._instrument_token_cache
+        assert market._instrument_token_cache["INFY"] == 408065
+
+        # instruments() should have been called exactly once
+        mock_kite.instruments.assert_called_once_with("NSE")
+
+        # Cleanup
+        market._kite = None
+        market._data_source = "yfinance"
+        market._instrument_token_cache = {}
+
+    def test_get_price_history_uses_cache_not_live_fetch(self, in_memory_db):
+        """get_price_history uses cached token — instruments() not called again."""
+        from aaitrade.tools import market
+
+        mock_kite = _make_mock_kite()
+        # Pre-populate cache directly (simulating what set_kite_client does)
+        market._instrument_token_cache = {"RELIANCE": 738561}
+
+        with patch("aaitrade.tools.market._data_source", "kite"), \
+             patch("aaitrade.tools.market._kite", mock_kite):
+            result = market.get_price_history("RELIANCE", days=30)
+
+        assert "error" not in result
+        # instruments() should NOT have been called — token came from cache
+        mock_kite.instruments.assert_not_called()
+
+        # Cleanup
+        market._instrument_token_cache = {}
+
+    def test_watchlist_add_validates_via_kite_cache(self, in_memory_db, session_with_watchlist):
+        """add_to_watchlist uses instrument cache to validate symbol — no live fetch."""
+        from aaitrade.tools import watchlist_tools
+        from aaitrade.tools import market
+
+        watchlist_tools.set_session_id(session_with_watchlist)
+        mock_kite = _make_mock_kite()
+
+        # Pre-populate cache (WIPRO not in it — should be rejected)
+        market._instrument_token_cache = {"RELIANCE": 738561, "INFY": 408065, "TCS": 2953217, "HDFCBANK": 341249}
+
+        with patch("aaitrade.tools.watchlist_tools._kite", mock_kite):
+            # Valid symbol in cache — should be added
+            result = watchlist_tools.add_to_watchlist("INFY", "IT sector play")
+            assert result["status"] == "added"
+
+            # Symbol not in cache — should be rejected
+            result = watchlist_tools.add_to_watchlist("WIPRO", "also IT")
+            assert result["status"] == "rejected"
+            assert "not found" in result["reason"].lower()
+
+        # instruments() should NOT have been called — cache was used
+        mock_kite.instruments.assert_not_called()
+
+        # Cleanup
+        market._instrument_token_cache = {}
+
 
 # ── News Caching ───────────────────────────────────────────────────────────────
 
