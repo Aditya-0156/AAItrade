@@ -224,7 +224,9 @@ class TestWatchlistTools:
     def test_add_to_watchlist(self, in_memory_db, session_with_watchlist):
         from aaitrade.tools import watchlist_tools
         watchlist_tools.set_session_id(session_with_watchlist)
-        result = watchlist_tools.add_to_watchlist("INFY", "Strong IT sector rotation play")
+        mock_kite = _make_mock_kite()
+        with patch("aaitrade.tools.watchlist_tools._kite", mock_kite):
+            result = watchlist_tools.add_to_watchlist("INFY", "Strong IT sector rotation play")
         assert result["status"] == "added"
         assert result["symbol"] == "INFY"
 
@@ -277,44 +279,102 @@ class TestWatchlistTools:
 
 # ── Market Tools ───────────────────────────────────────────────────────────────
 
+def _make_mock_kite():
+    """Return a MagicMock Kite client with realistic quote/historical_data responses."""
+    kite = MagicMock()
+    kite.quote.return_value = {
+        "NSE:RELIANCE": {
+            "last_price": 2850.0,
+            "volume": 1_000_000,
+            "ohlc": {"open": 2810.0, "high": 2870.0, "low": 2800.0, "close": 2800.0},
+        },
+        "NSE:NIFTY 50": {
+            "last_price": 22000.0,
+            "ohlc": {"open": 21900.0, "high": 22100.0, "low": 21850.0, "close": 21800.0},
+        },
+        "NSE:NIFTY BANK": {
+            "last_price": 47500.0,
+            "ohlc": {"open": 47200.0, "high": 47800.0, "low": 47100.0, "close": 47300.0},
+        },
+    }
+    # instruments() used by _kite_get_history and add_to_watchlist validation
+    kite.instruments.return_value = [
+        {"tradingsymbol": "RELIANCE", "segment": "NSE", "instrument_token": 738561, "name": "Reliance Industries"},
+        {"tradingsymbol": "INFY",     "segment": "NSE", "instrument_token": 408065, "name": "Infosys"},
+        {"tradingsymbol": "TCS",      "segment": "NSE", "instrument_token": 2953217, "name": "TCS"},
+        {"tradingsymbol": "HDFCBANK", "segment": "NSE", "instrument_token": 341249, "name": "HDFC Bank"},
+    ]
+    # historical_data() returns list of candle dicts
+    from datetime import datetime as _dt
+    candles = [
+        {"date": _dt(2026, 3, i, 0, 0), "open": 2800.0, "high": 2870.0,
+         "low": 2780.0, "close": 2850.0, "volume": 500_000}
+        for i in range(1, 32)
+    ]
+    kite.historical_data.return_value = candles
+    return kite
+
+
 class TestMarketTools:
-    def test_get_current_price_yfinance(self, in_memory_db):
-        """get_current_price falls back to yfinance when no Kite."""
+    def test_get_current_price_kite(self, in_memory_db):
+        """get_current_price uses Kite when a client is injected."""
         from aaitrade.tools import market
 
-        fake_price = {
-            "symbol": "RELIANCE", "last_price": 2850.0,
-            "change_percent": 1.78, "volume": 1_000_000,
-            "open": 2810.0, "high": 2870.0, "low": 2800.0,
-            "close": 2800.0, "timestamp": "2026-03-17T10:00:00",
+        mock_kite = _make_mock_kite()
+        mock_kite.quote.return_value = {
+            "NSE:RELIANCE": {
+                "last_price": 2850.0,
+                "volume": 1_000_000,
+                "ohlc": {"open": 2810.0, "high": 2870.0, "low": 2800.0, "close": 2800.0},
+            }
         }
-        with patch("aaitrade.tools.market._data_source", "yfinance"), \
-             patch("aaitrade.tools.market._yf_get_quote", return_value=fake_price):
+        with patch("aaitrade.tools.market._data_source", "kite"), \
+             patch("aaitrade.tools.market._kite", mock_kite):
             result = market.get_current_price("RELIANCE")
 
         assert "error" not in result
         assert result["last_price"] == pytest.approx(2850.0)
+        assert result["symbol"] == "RELIANCE"
 
-    def test_get_current_price_returns_error_on_failure(self, in_memory_db):
+    def test_get_current_price_returns_error_on_kite_failure(self, in_memory_db):
+        """get_current_price wraps Kite exceptions into an error dict."""
         from aaitrade.tools import market
-        with patch("aaitrade.tools.market._data_source", "yfinance"), \
-             patch("aaitrade.tools.market._yf_get_quote", return_value={"error": "network error"}):
+
+        mock_kite = MagicMock()
+        mock_kite.quote.side_effect = Exception("Token expired")
+        with patch("aaitrade.tools.market._data_source", "kite"), \
+             patch("aaitrade.tools.market._kite", mock_kite):
             result = market.get_current_price("RELIANCE")
         assert "error" in result
 
-    def test_get_market_snapshot_returns_nifty_and_banknifty(self, in_memory_db):
+    def test_get_price_history_kite(self, in_memory_db):
+        """get_price_history returns OHLCV candles via Kite."""
         from aaitrade.tools import market
 
-        fake_price = {
-            "symbol": "^NSEI", "last_price": 22000.0, "change_percent": 0.9,
-            "volume": 0, "open": 21900.0, "high": 22100.0, "low": 21850.0,
-            "close": 21800.0, "timestamp": "2026-03-17T10:00:00",
-        }
-        with patch("aaitrade.tools.market._data_source", "yfinance"), \
-             patch("aaitrade.tools.market._yf_get_quote", return_value=fake_price):
+        mock_kite = _make_mock_kite()
+        with patch("aaitrade.tools.market._data_source", "kite"), \
+             patch("aaitrade.tools.market._kite", mock_kite):
+            result = market.get_price_history("RELIANCE", days=30)
+
+        assert "error" not in result
+        assert result["symbol"] == "RELIANCE"
+        assert len(result["candles"]) == 30
+        assert "close" in result["candles"][0]
+
+    def test_get_market_snapshot_kite(self, in_memory_db):
+        """get_market_snapshot returns Nifty and Bank Nifty via Kite."""
+        from aaitrade.tools import market
+
+        mock_kite = _make_mock_kite()
+        with patch("aaitrade.tools.market._data_source", "kite"), \
+             patch("aaitrade.tools.market._kite", mock_kite):
             result = market.get_market_snapshot()
-        # Either returns data or error — just must not crash
-        assert isinstance(result, dict)
+
+        assert "error" not in result
+        assert "nifty_50" in result
+        assert "bank_nifty" in result
+        assert result["nifty_50"]["last_price"] == pytest.approx(22000.0)
+        assert result["source"] == "kite"
 
 
 # ── News Caching ───────────────────────────────────────────────────────────────
