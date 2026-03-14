@@ -27,7 +27,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are AAItrade, autonomous trading agent for India
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SESSION STATE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Mode: {trading_mode} | Capital: ₹{current_capital:,.0f} | Secured: ₹{secured_profit:,.0f}
+Mode: {trading_mode} | Free cash: ₹{current_capital:,.0f} | Secured: ₹{secured_profit:,.0f}
 Day {current_day}/{total_days} | {current_time} IST
 
 YOUR MANDATE

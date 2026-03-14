@@ -214,6 +214,15 @@ class Executor:
         trade_value = price * quantity
         logger.info(f"[PAPER] BUY {symbol} x{quantity} @ ₹{price:.2f} = ₹{trade_value:.2f}")
 
+        # Deduct deployed capital from current_capital so DB reflects free cash
+        session_cap = db.query_one(
+            "SELECT current_capital FROM sessions WHERE id = ?", (self.session_id,)
+        )
+        if session_cap:
+            db.update("sessions", self.session_id, {
+                "current_capital": round(session_cap["current_capital"] - trade_value, 2),
+            })
+
         return {
             "status": "executed",
             "mode": "paper",
@@ -329,21 +338,22 @@ class Executor:
         else:
             db.update("portfolio", position["id"], {"quantity": remaining})
 
-        # Handle profit/loss
+        # Handle profit/loss — current_capital is free cash (cost_basis was deducted at BUY)
+        # Return cost_basis to free cash, then split any profit per mode
         session = db.query_one("SELECT id, current_capital, secured_profit FROM sessions WHERE id = ?", (self.session_id,))
         if session:
-            new_capital = session["current_capital"] + pnl
+            cost_basis = position["avg_price"] * quantity
             new_secured = session["secured_profit"]
 
             if pnl > 0:
-                # Profit handling based on mode
                 reinvest_ratio = self.config.profit_reinvest_ratio
-                reinvest = pnl * reinvest_ratio
                 secure = pnl * (1 - reinvest_ratio)
-                new_capital = session["current_capital"] + reinvest
+                # Return cost_basis + reinvested portion of profit to free cash
+                new_capital = session["current_capital"] + cost_basis + (pnl * reinvest_ratio)
                 new_secured = session["secured_profit"] + secure
             else:
-                new_capital = session["current_capital"] + pnl
+                # Loss: return only what the sale actually brought in
+                new_capital = session["current_capital"] + (price * quantity)
 
             db.update("sessions", self.session_id, {
                 "current_capital": round(new_capital, 2),

@@ -74,8 +74,8 @@ class Reporter:
 
         summary_text = "\n".join(summary_lines)
 
-        # Store daily summary
-        db.insert("daily_summary", {
+        # Store daily summary — upsert so double-calling on the same day is safe
+        db.upsert("daily_summary", {
             "session_id": self.session_id,
             "day_number": day_number,
             "date": today,
@@ -87,7 +87,7 @@ class Reporter:
             "losses": losses,
             "total_pnl": round(total_pnl, 2),
             "summary_text": summary_text,
-        })
+        }, conflict_columns=["session_id", "day_number"])
 
         logger.info(f"\n{summary_text}")
         return summary_text

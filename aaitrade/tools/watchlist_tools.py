@@ -112,10 +112,11 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
             "reason": f"{symbol} is already on the watchlist.",
         }
 
-    # Validate symbol exists on NSE via Kite
+    # Validate symbol exists
     company_name = ""
     sector = ""
     if _kite:
+        # Live mode: validate against NSE instrument list via Kite
         try:
             instruments = _kite.instruments("NSE")
             found = None
@@ -128,12 +129,36 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
                 return {
                     "status": "rejected",
                     "symbol": symbol,
-                    "reason": f"{symbol} not found on NSE. Check the symbol.",
+                    "reason": (
+                        f"{symbol} not found on NSE. "
+                        "Use the exact NSE trading symbol (e.g. 'HDFCBANK', not 'HDFC BANK')."
+                    ),
                 }
 
             company_name = found.get("name", "")
         except Exception as e:
-            logger.warning(f"Could not validate {symbol} on NSE: {e}")
+            logger.warning(f"Could not validate {symbol} on NSE via Kite: {e}")
+    else:
+        # Paper mode: validate that Yahoo Finance returns data for this NSE symbol
+        try:
+            from aaitrade.tools.market import _yf_get_quote
+            quote = _yf_get_quote(symbol)
+            if "error" in quote:
+                return {
+                    "status": "rejected",
+                    "symbol": symbol,
+                    "reason": (
+                        f"{symbol} could not be validated: Yahoo Finance returned no data. "
+                        "Ensure this is a valid NSE symbol (e.g. 'RELIANCE', 'HDFCBANK'). "
+                        "US stocks and typos will be rejected."
+                    ),
+                }
+        except Exception as e:
+            # Network error during validation — allow but log so it's visible
+            logger.warning(
+                f"Could not validate {symbol} via yfinance (network error): {e}. "
+                "Adding anyway — will fail at trade time if symbol is invalid."
+            )
 
     # Add to watchlist
     db.insert("watchlist", {

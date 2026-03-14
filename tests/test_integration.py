@@ -94,8 +94,11 @@ class TestFullBuySellCycle:
 
         # Capital updated
         session = db.query_one("SELECT current_capital, secured_profit FROM sessions WHERE id = ?", (session_with_watchlist,))
-        # Balanced: 50% of ₹50 = ₹25 reinvested, ₹25 secured
+        # BUY deducts ₹1000 from capital → 20000-1000 = 19000
+        # SELL at 1050: pnl=50, balanced reinvests 50% (₹25), secures 50% (₹25)
+        # capital = 19000 + cost_basis(1000) + reinvested(25) = 20025
         assert session["secured_profit"] == pytest.approx(25.0, abs=1)
+        assert session["current_capital"] == pytest.approx(20_025.0, abs=1)
 
 
 # ── Executor rejection doesn't break the session ──────────────────────────────

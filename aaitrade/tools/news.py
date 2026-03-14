@@ -20,6 +20,11 @@ _newsapi = None
 # Anthropic client for summarization
 _anthropic_client = None
 
+# Rate-limit tracking: NewsAPI free tier = 100 req/day; stay 10 below as buffer
+_newsapi_call_count = 0
+_newsapi_call_date: str | None = None
+_NEWSAPI_DAILY_CAP = 90
+
 
 def set_newsapi_client(client):
     global _newsapi
@@ -29,6 +34,22 @@ def set_newsapi_client(client):
 def set_anthropic_client(client):
     global _anthropic_client
     _anthropic_client = client
+
+
+def _newsapi_check_and_count() -> bool:
+    """Return True if a NewsAPI call is allowed; False if daily cap is reached.
+
+    Resets the counter automatically at the start of each new calendar day.
+    """
+    global _newsapi_call_count, _newsapi_call_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _newsapi_call_date != today:
+        _newsapi_call_count = 0
+        _newsapi_call_date = today
+    if _newsapi_call_count >= _NEWSAPI_DAILY_CAP:
+        return False
+    _newsapi_call_count += 1
+    return True
 
 
 def _summarize_articles(articles: list[dict], context: str = "") -> str:
@@ -124,6 +145,16 @@ def get_stock_news(symbol: str, hours: int = 24) -> dict:
     if not _newsapi:
         return {"symbol": symbol, "summary": "NewsAPI not configured.", "source": "error"}
 
+    if not _newsapi_check_and_count():
+        return {
+            "symbol": symbol,
+            "summary": (
+                "NewsAPI daily call limit reached. "
+                "Use the web search tool (search_web) if you need current news for this stock."
+            ),
+            "source": "rate_limited",
+        }
+
     try:
         from_date = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
         result = _newsapi.get_everything(
@@ -167,6 +198,13 @@ def get_sector_news(sector: str) -> dict:
     if not _newsapi:
         return {"sector": sector, "summary": "NewsAPI not configured.", "source": "error"}
 
+    if not _newsapi_check_and_count():
+        return {
+            "sector": sector,
+            "summary": "NewsAPI daily call limit reached. Use search_web for sector news if needed.",
+            "source": "rate_limited",
+        }
+
     try:
         result = _newsapi.get_everything(
             q=f"India {sector} sector stocks market",
@@ -205,6 +243,12 @@ def get_macro_news() -> dict:
 
     if not _newsapi:
         return {"summary": "NewsAPI not configured.", "source": "error"}
+
+    if not _newsapi_check_and_count():
+        return {
+            "summary": "NewsAPI daily call limit reached. Macro news unavailable from this source.",
+            "source": "rate_limited",
+        }
 
     try:
         result = _newsapi.get_top_headlines(

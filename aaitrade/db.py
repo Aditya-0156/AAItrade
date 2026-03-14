@@ -216,6 +216,25 @@ def insert(table: str, data: dict[str, Any]) -> int:
         return cursor.lastrowid
 
 
+def upsert(table: str, data: dict[str, Any], conflict_columns: list) -> int:
+    """Insert or update a row on conflict. Returns the row id.
+
+    conflict_columns: the columns that define uniqueness (e.g. ["session_id", "day_number"])
+    All other columns are updated when a conflict occurs.
+    """
+    cols = ", ".join(data.keys())
+    placeholders = ", ".join(["?"] * len(data))
+    update_cols = [k for k in data.keys() if k not in conflict_columns]
+    update_clause = ", ".join(f"{k} = excluded.{k}" for k in update_cols)
+    sql = (
+        f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) "
+        f"ON CONFLICT({', '.join(conflict_columns)}) DO UPDATE SET {update_clause}"
+    )
+    with get_connection() as conn:
+        cursor = conn.execute(sql, list(data.values()))
+        return cursor.lastrowid
+
+
 def update(table: str, row_id: int, data: dict[str, Any]):
     """Update a row by id."""
     sets = ", ".join(f"{k} = ?" for k in data.keys())

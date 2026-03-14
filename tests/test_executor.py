@@ -253,6 +253,7 @@ class TestSellValidations:
 
     def test_sell_profitable_updates_capital_and_secured(self, in_memory_db, balanced_config, session_with_watchlist):
         """Balanced: 50% profit reinvested, 50% secured."""
+        # Position inserted directly — no BUY through executor, current_capital stays at 20000
         self._buy_reliance(session_with_watchlist, price=500)
         ex = make_executor(balanced_config, session_with_watchlist)
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 600)):
@@ -260,10 +261,13 @@ class TestSellValidations:
         assert result["status"] == "executed"
         assert result["pnl"] == pytest.approx(500.0)  # (600-500) × 5 = ₹500
         session = db.query_one("SELECT current_capital, secured_profit FROM sessions WHERE id = ?", (session_with_watchlist,))
-        # Balanced: reinvest 50% of ₹500 = ₹250 back to capital, secure ₹250
+        # Balanced: reinvest 50% of ₹500=₹250, secure ₹250
+        # capital = 20000 + cost_basis(2500) + reinvested(250) = 22750
         assert session["secured_profit"] == pytest.approx(250.0, abs=1)
+        assert session["current_capital"] == pytest.approx(22_750.0, abs=1)
 
     def test_sell_at_loss_reduces_capital(self, in_memory_db, balanced_config, session_with_watchlist):
+        # Insert position directly (no BUY through executor — so no capital deducted yet)
         self._buy_reliance(session_with_watchlist, price=500)
         ex = make_executor(balanced_config, session_with_watchlist)
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 480)):
@@ -271,7 +275,9 @@ class TestSellValidations:
         assert result["status"] == "executed"
         assert result["pnl"] == pytest.approx(-100.0)
         session = db.query_one("SELECT current_capital FROM sessions WHERE id = ?", (session_with_watchlist,))
-        assert session["current_capital"] == pytest.approx(20_000 - 100.0, abs=1)
+        # Sell returns: current_capital + sell_proceeds (480*5=2400)
+        # current_capital started at 20000 (no BUY deduction since position was inserted directly)
+        assert session["current_capital"] == pytest.approx(20_000 + 480 * 5, abs=1)
 
     def test_sell_removes_position_from_portfolio(self, in_memory_db, balanced_config, session_with_watchlist):
         self._buy_reliance(session_with_watchlist, price=500)
@@ -326,15 +332,18 @@ class TestProfitReinvestment:
         })
         row = self._setup_sell(safe_config, sid, buy_price=1000, sell_price=1100, qty=1)
         # Safe: reinvest 0%, secure 100% of ₹100 profit
+        # Position inserted directly (no BUY deduction), so capital = 10000 + cost_basis + 0
+        # cost_basis=1000, reinvest=0 → 10000 + 1000 = 11000; all profit secured
         assert row["secured_profit"] == pytest.approx(100.0, abs=1)
-        # capital should not increase (profit goes to secured, not trading capital)
-        assert row["current_capital"] == pytest.approx(10_000.0, abs=1)
+        assert row["current_capital"] == pytest.approx(10_000.0 + 1000.0, abs=1)
 
     def test_balanced_splits_profit(self, in_memory_db, balanced_config, session_with_watchlist):
         row = self._setup_sell(balanced_config, session_with_watchlist, buy_price=1000, sell_price=1100, qty=1)
         # Balanced: 50% of ₹100 = ₹50 secured, ₹50 reinvested
+        # Position inserted directly (no BUY deduction), so capital = 20000 + cost_basis + reinvested
+        # cost_basis=1000, reinvested=50 → 20000 + 1000 + 50 = 21050
         assert row["secured_profit"] == pytest.approx(50.0, abs=1)
-        assert row["current_capital"] == pytest.approx(20_000.0 + 50.0, abs=1)
+        assert row["current_capital"] == pytest.approx(20_000.0 + 1000.0 + 50.0, abs=1)
 
     def test_aggressive_reinvests_all_profit(self, in_memory_db, aggressive_config, session_with_watchlist):
         # Need a session for aggressive config
@@ -351,8 +360,10 @@ class TestProfitReinvestment:
         })
         row = self._setup_sell(aggressive_config, sid, buy_price=1000, sell_price=1100, qty=1)
         # Aggressive: reinvest 100%, secure 0%
+        # Position inserted directly (no BUY deduction), so capital = 20000 + cost_basis + all profit
+        # cost_basis=1000, profit=100, reinvest_ratio=1.0 → 20000 + 1000 + 100 = 21100
         assert row["secured_profit"] == pytest.approx(0.0, abs=1)
-        assert row["current_capital"] == pytest.approx(20_000.0 + 100.0, abs=1)
+        assert row["current_capital"] == pytest.approx(20_000.0 + 1000.0 + 100.0, abs=1)
 
 
 # ── Daily loss limit ───────────────────────────────────────────────────────────

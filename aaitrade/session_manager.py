@@ -40,6 +40,7 @@ class SessionManager:
         self.session_id: int | None = None
         self.cycle_count = 0
         self._recovered = False  # set True by multi_session recovery
+        self._eod_done_date: str | None = None  # guard: run EOD at most once per calendar day
 
     def start(self):
         """Initialize and start a new trading session."""
@@ -351,7 +352,12 @@ class SessionManager:
                 return  # Stop processing further decisions if session halted
 
     def _end_of_day(self):
-        """Run end-of-day processing."""
+        """Run end-of-day processing — guarded to fire at most once per calendar day."""
+        today_str = datetime.now(_IST).strftime("%Y-%m-%d")
+        if self._eod_done_date == today_str:
+            logger.debug("EOD already processed today, skipping duplicate call.")
+            return
+        self._eod_done_date = today_str
         logger.info("End of day — generating summary...")
 
         # Check auto stop-loss on open positions (paper mode)
@@ -387,6 +393,18 @@ class SessionManager:
             from aaitrade.tools.market import get_current_price
             price_data = get_current_price(pos["symbol"])
             if "error" in price_data:
+                logger.warning(
+                    f"EOD stop-loss check: could not fetch price for {pos['symbol']} "
+                    f"(held: {pos['quantity']} shares @ avg ₹{pos['avg_price']}). "
+                    f"Stop-loss/take-profit NOT evaluated — position stays open. "
+                    f"Error: {price_data.get('error')}"
+                )
+                bot = get_bot()
+                if bot:
+                    bot.send(
+                        f"⚠️ EOD: Could not fetch price for *{pos['symbol']}*. "
+                        f"Stop-loss not evaluated — position remains open."
+                    )
                 continue
 
             current_price = price_data["last_price"]
