@@ -116,26 +116,39 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
     company_name = ""
     sector = ""
     if _kite:
-        # Live mode: validate against NSE instrument list via Kite
+        # Validate against cached NSE instrument list (downloaded once at startup)
         try:
-            instruments = _kite.instruments("NSE")
-            found = None
-            for inst in instruments:
-                if inst["tradingsymbol"] == symbol and inst["segment"] == "NSE":
-                    found = inst
-                    break
-
-            if not found:
-                return {
-                    "status": "rejected",
-                    "symbol": symbol,
-                    "reason": (
-                        f"{symbol} not found on NSE. "
-                        "Use the exact NSE trading symbol (e.g. 'HDFCBANK', not 'HDFC BANK')."
-                    ),
-                }
-
-            company_name = found.get("name", "")
+            from aaitrade.tools.market import _instrument_token_cache
+            if _instrument_token_cache:
+                # Use the cache built at startup — no network call needed
+                if symbol not in _instrument_token_cache:
+                    return {
+                        "status": "rejected",
+                        "symbol": symbol,
+                        "reason": (
+                            f"{symbol} not found on NSE. "
+                            "Use the exact NSE trading symbol (e.g. 'HDFCBANK', not 'HDFC BANK')."
+                        ),
+                    }
+                company_name = symbol  # cache doesn't store names, symbol is enough
+            else:
+                # Cache not ready — fall back to live fetch
+                instruments = _kite.instruments("NSE")
+                found = None
+                for inst in instruments:
+                    if inst["tradingsymbol"] == symbol and inst["segment"] == "NSE":
+                        found = inst
+                        break
+                if not found:
+                    return {
+                        "status": "rejected",
+                        "symbol": symbol,
+                        "reason": (
+                            f"{symbol} not found on NSE. "
+                            "Use the exact NSE trading symbol (e.g. 'HDFCBANK', not 'HDFC BANK')."
+                        ),
+                    }
+                company_name = found.get("name", "")
         except Exception as e:
             logger.warning(f"Could not validate {symbol} on NSE via Kite: {e}")
     else:

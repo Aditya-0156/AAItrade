@@ -21,14 +21,26 @@ logger = logging.getLogger(__name__)
 _kite = None
 # Data source: "yfinance" (default/free) or "kite" (live trading)
 _data_source = "yfinance"
+# Instrument token cache: symbol -> token, built once at startup
+_instrument_token_cache: dict[str, int] = {}
 
 
 def set_kite_client(kite):
     """Inject the authenticated KiteConnect instance. Switches data source to Kite."""
-    global _kite, _data_source
+    global _kite, _data_source, _instrument_token_cache
     _kite = kite
     _data_source = "kite"
-    logger.info("Market data source: Kite Connect")
+    # Download all NSE instruments once and cache symbol -> token
+    try:
+        instruments = kite.instruments("NSE")
+        _instrument_token_cache = {
+            inst["tradingsymbol"]: inst["instrument_token"]
+            for inst in instruments
+            if inst.get("segment") == "NSE"
+        }
+        logger.info(f"Market data source: Kite Connect ({len(_instrument_token_cache)} NSE instruments cached)")
+    except Exception as e:
+        logger.warning(f"Could not pre-cache NSE instruments: {e}. Will fetch on demand.")
 
 
 def set_data_source(source: str):
@@ -154,12 +166,18 @@ def _kite_get_quote(symbol: str) -> dict:
 
 def _kite_get_history(symbol: str, days: int) -> dict:
     """Get historical OHLCV via Kite."""
-    instruments = _kite.instruments("NSE")
-    token = None
-    for inst in instruments:
-        if inst["tradingsymbol"] == symbol:
-            token = inst["instrument_token"]
-            break
+    # Use cached token; fall back to live fetch if cache missed
+    token = _instrument_token_cache.get(symbol)
+    if token is None:
+        try:
+            instruments = _kite.instruments("NSE")
+            for inst in instruments:
+                if inst["tradingsymbol"] == symbol:
+                    token = inst["instrument_token"]
+                    _instrument_token_cache[symbol] = token
+                    break
+        except Exception as e:
+            return {"error": f"Could not fetch instrument list: {e}"}
 
     if token is None:
         return {"error": f"Symbol {symbol} not found on NSE"}
