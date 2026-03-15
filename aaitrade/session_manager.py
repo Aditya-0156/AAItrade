@@ -453,8 +453,47 @@ class SessionManager:
                         mode=result.get("mode", "paper"),
                     )
 
+    def _close_all_positions(self):
+        """Force-close all open positions at end of session."""
+        positions = db.query(
+            "SELECT id, symbol, quantity, avg_price FROM portfolio WHERE session_id = ? AND quantity > 0",
+            (self.session_id,),
+        )
+        if not positions:
+            return
+
+        logger.info(f"Closing {len(positions)} open position(s) at session end...")
+        for pos in positions:
+            from aaitrade.tools.market import get_current_price
+            price_data = get_current_price(pos["symbol"])
+            price = price_data.get("last_price", pos["avg_price"]) if "error" not in price_data else pos["avg_price"]
+
+            decision = {
+                "action": "SELL",
+                "symbol": pos["symbol"],
+                "quantity": pos["quantity"],
+                "reason": "Session ended — closing all positions",
+                "confidence": "high",
+                "flags": [],
+            }
+            result = self.executor.execute(decision)
+            logger.info(f"  Closed {pos['symbol']}: {result.get('status')} @ ₹{price:.2f}")
+
+            bot = get_bot()
+            if bot and result.get("status") == "executed":
+                bot.send_trade_alert(
+                    action="SELL", symbol=pos["symbol"],
+                    quantity=pos["quantity"], price=price,
+                    reason="Session ended — all positions closed",
+                    pnl=result.get("pnl"),
+                    mode=result.get("mode", "paper"),
+                )
+
     def _complete_session(self):
         """Mark the session as completed."""
+        # Close all open positions before finalizing
+        self._close_all_positions()
+
         db.update("sessions", self.session_id, {
             "status": "completed",
             "ended_at": db.now_iso(),

@@ -281,16 +281,29 @@ class TelegramBot:
         self.send(f"\u25b6\ufe0f Session {sid} resumed.")
 
     def _cmd_token(self, args: str):
-        """Update Kite access token. Usage: /token <new_token>"""
+        """Update Kite access token live. Usage: /token <new_token>"""
         token = args.strip()
         if not token:
             self.send("Usage: /token <kite\\_access\\_token>")
             return
 
-        # Write to env so next Kite init picks it up
+        # Update env
         os.environ["KITE_ACCESS_TOKEN"] = token
-        self.send(f"\u2705 Kite access token updated. Restart sessions to apply.")
-        logger.info("Kite access token updated via Telegram")
+
+        # Update live Kite client immediately — no restart needed
+        try:
+            from aaitrade.tools.market import _kite, set_kite_client
+            if _kite is not None:
+                _kite.set_access_token(token)
+                # Rebuild instrument cache with fresh token
+                set_kite_client(_kite)
+                self.send("\u2705 Kite token updated and applied live — no restart needed.")
+            else:
+                self.send("\u2705 Kite token saved. Kite client not active yet — will apply on next start.")
+            logger.info("Kite access token updated live via Telegram")
+        except Exception as e:
+            self.send(f"\u26a0\ufe0f Token saved but live update failed: {e}")
+            logger.error(f"Live token update failed: {e}")
 
     def _cmd_help(self, args: str):
         """Show available commands."""
