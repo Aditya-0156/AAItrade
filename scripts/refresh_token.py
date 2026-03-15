@@ -41,9 +41,17 @@ def exchange_token(request_token: str) -> str:
     return data["access_token"]
 
 
+def validate_token(access_token: str) -> str:
+    """Validate the token works by fetching the user profile. Returns user name."""
+    from kiteconnect import KiteConnect
+    kite = KiteConnect(api_key=API_KEY)
+    kite.set_access_token(access_token)
+    profile = kite.profile()
+    return profile["user_name"]
+
+
 def update_server_env(access_token: str):
     """SSH into server and update KITE_ACCESS_TOKEN in .env"""
-    # sed command: replace the KITE_ACCESS_TOKEN line in .env
     sed_cmd = f"sed -i 's/^KITE_ACCESS_TOKEN=.*/KITE_ACCESS_TOKEN={access_token}/' {SERVER_ENV}"
 
     ssh = [
@@ -74,16 +82,23 @@ def main():
     try:
         access_token = exchange_token(request_token)
     except Exception as e:
-        print(f"Failed to get access token: {e}")
+        print(f"FAILED: Could not get access token: {e}")
         print("The request_token may have expired — get a fresh one from the browser.")
         sys.exit(1)
 
-    print(f"Access token: {access_token[:8]}...{access_token[-4:]} (hidden for security)")
+    print("Validating token with Kite API...")
+    try:
+        user_name = validate_token(access_token)
+        print(f"Token valid — logged in as: {user_name}")
+    except Exception as e:
+        print(f"FAILED: Token validation failed: {e}")
+        print("Server NOT updated. Get a fresh request_token and try again.")
+        sys.exit(1)
 
     print("Updating server .env...")
     update_server_env(access_token)
 
-    print("Done. Kite token updated on server — trading continues without restart.")
+    print("Done. Kite token verified and updated on server — trading continues without restart.")
 
 
 if __name__ == "__main__":
