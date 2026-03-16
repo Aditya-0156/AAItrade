@@ -316,7 +316,14 @@ class SessionManager:
             (self.session_id,),
         )
         if session:
-            drawdown = ((session["starting_capital"] - session["current_capital"]) / session["starting_capital"]) * 100
+            # Drawdown = starting capital vs (free cash + deployed positions at cost)
+            deployed = db.query(
+                "SELECT SUM(quantity * avg_price) as total FROM portfolio WHERE session_id = ?",
+                (self.session_id,),
+            )
+            deployed_value = deployed[0]["total"] if deployed and deployed[0]["total"] else 0
+            total_value = session["current_capital"] + deployed_value
+            drawdown = ((session["starting_capital"] - total_value) / session["starting_capital"]) * 100
             if drawdown >= self.config.risk_rules.session_stop_loss:
                 logger.critical(f"Session drawdown at {drawdown:.1f}% — halting session")
                 self.executor._halt_session("Session stop-loss reached")

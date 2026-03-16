@@ -144,8 +144,10 @@ class Executor:
         if self._daily_loss_exceeded():
             return {"status": "rejected", "reason": "Daily loss limit already hit"}
 
-        # 9. Check session drawdown
-        drawdown = ((session["starting_capital"] - current_capital) / session["starting_capital"]) * 100
+        # 9. Check session drawdown (based on total portfolio value, not just cash)
+        total_value = current_capital  # free cash
+        total_value += current_deployed  # + value of open positions at cost
+        drawdown = ((session["starting_capital"] - total_value) / session["starting_capital"]) * 100
         if drawdown >= self.rules.session_stop_loss:
             self._halt_session("Session stop-loss reached")
             return {"status": "halted", "reason": "Session stop-loss reached (20% drawdown)"}
