@@ -100,6 +100,15 @@ def main():
         print("Server NOT updated. Get a fresh request_token and try again.")
         sys.exit(1)
 
+    # Update local .env first
+    local_env = Path(__file__).resolve().parent.parent / ".env"
+    if local_env.exists():
+        content = local_env.read_text()
+        import re
+        content = re.sub(r"^KITE_ACCESS_TOKEN=.*$", f"KITE_ACCESS_TOKEN={access_token}", content, flags=re.MULTILINE)
+        local_env.write_text(content)
+        print(f"Local .env updated with new token.")
+
     print("Updating server .env...")
     update_server_env(access_token)
 
