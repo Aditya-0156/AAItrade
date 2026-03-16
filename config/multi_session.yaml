@@ -8,29 +8,29 @@
 
 sessions:
   # ── Balanced (10 market days = ~2 calendar weeks) ──────────────────────
-  - name: balanced-10d
+  - name: balanced-5d
     capital: 20000
     mode: balanced
     execution: paper
-    days: 10
+    days: 5
     watchlist: config/watchlist_seed.yaml
     interval: 240
 
   # ── Aggressive ─────────────────────────────────────────────────────────
-  - name: aggressive-10d
+  - name: aggressive-5d
     capital: 20000
     mode: aggressive
     execution: paper
-    days: 10
+    days: 5
     watchlist: config/watchlist_seed.yaml
     interval: 240
 
   # ── Safe baseline ───────────────────────────────────────────────────────
-  - name: safe-10d
+  - name: safe-5d
     capital: 20000
     mode: safe
     execution: paper
-    days: 10
+    days: 5
     watchlist: config/watchlist_seed.yaml
     interval: 240
     watchlist_adjust: false
