@@ -55,7 +55,7 @@ class ClaudeClient:
                 try:
                     response = self.client.messages.create(
                         model=self.model,
-                        max_tokens=4096,
+                        max_tokens=2048,
                         system=[
                             {
                                 "type": "text",
