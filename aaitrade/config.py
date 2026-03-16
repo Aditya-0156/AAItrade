@@ -155,7 +155,7 @@ class SessionConfig:
     watchlist_path: str | Path
     allow_watchlist_adjustment: bool = True
     decision_interval_minutes: int = 15
-    max_tool_calls_per_cycle: int = 8
+    max_tool_calls_per_cycle: int = 5
     max_web_searches_per_cycle: int = 2
     model: str = "claude-haiku-4-5-20251001"  # Default Haiku for cost (~73% cheaper); override per-session if needed
 
