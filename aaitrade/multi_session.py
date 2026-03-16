@@ -158,11 +158,12 @@ class MultiSessionRunner:
                 disable_tool("add_to_watchlist")
                 disable_tool("remove_from_watchlist")
 
-            from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools
+            from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
             portfolio_tools.set_session_id(manager.session_id)
             memory.set_session_id(manager.session_id)
             journal.set_session_id(manager.session_id)
             watchlist_tools.set_session_id(manager.session_id)
+            session_memory.set_session_id(manager.session_id)
 
             logger.info(f"'{name}' recovered — entering run loop")
             manager.run()
