@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from datetime import datetime
 
@@ -17,6 +18,10 @@ from aaitrade import db
 from aaitrade.tools import call_tool, get_tools_for_api
 
 logger = logging.getLogger(__name__)
+
+# Global lock: only one session can call Claude at a time.
+# Prevents rate limits and freezes when multiple sessions run concurrently.
+_claude_lock = threading.Lock()
 
 
 class ClaudeClient:
@@ -50,42 +55,43 @@ class ClaudeClient:
 
         # Tool-use loop: Claude may call tools multiple times before deciding
         for round_num in range(self.max_tool_rounds):
-            # Retry on rate limit with exponential backoff
-            for attempt in range(4):
-                try:
-                    response = self.client.messages.create(
-                        model=self.model,
-                        max_tokens=2048,
-                        system=[
-                            {
-                                "type": "text",
-                                "text": system_prompt,
-                                "cache_control": {"type": "ephemeral"}
-                            }
-                        ],
-                        tools=tools,
-                        messages=messages,
-                    )
-                    break
-                except anthropic.RateLimitError:
-                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s, 20s
-                    logger.warning(f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/4")
-                    time.sleep(wait)
-                except anthropic.BadRequestError as e:
-                    # Monthly spend limit hit — no point retrying, halt gracefully
-                    if "reached your specified API usage limits" in str(e):
-                        logger.critical(f"Monthly API limit reached: {e}")
-                        return [{"action": "HOLD", "symbol": None, "quantity": None,
-                                 "stop_loss_price": None, "take_profit_price": None,
-                                 "reason": "Monthly API spend limit reached — session paused until limit resets.",
-                                 "confidence": "low", "flags": ["HALT_SESSION"]}]
-                    raise
-            else:
-                logger.error("Rate limit retries exhausted — returning HOLD")
-                return [{"action": "HOLD", "symbol": None, "quantity": None,
-                         "stop_loss_price": None, "take_profit_price": None,
-                         "reason": "Rate limit — too many concurrent sessions",
-                         "confidence": "low", "flags": []}]
+            # Acquire global lock so only one session calls Claude at a time
+            with _claude_lock:
+                for attempt in range(4):
+                    try:
+                        response = self.client.messages.create(
+                            model=self.model,
+                            max_tokens=2048,
+                            system=[
+                                {
+                                    "type": "text",
+                                    "text": system_prompt,
+                                    "cache_control": {"type": "ephemeral"}
+                                }
+                            ],
+                            tools=tools,
+                            messages=messages,
+                        )
+                        break
+                    except anthropic.RateLimitError:
+                        wait = 5 * (attempt + 1)  # 5s, 10s, 15s, 20s
+                        logger.warning(f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/4")
+                        time.sleep(wait)
+                    except anthropic.BadRequestError as e:
+                        # Monthly spend limit hit — no point retrying, halt gracefully
+                        if "reached your specified API usage limits" in str(e):
+                            logger.critical(f"Monthly API limit reached: {e}")
+                            return [{"action": "HOLD", "symbol": None, "quantity": None,
+                                     "stop_loss_price": None, "take_profit_price": None,
+                                     "reason": "Monthly API spend limit reached — session paused until limit resets.",
+                                     "confidence": "low", "flags": ["HALT_SESSION"]}]
+                        raise
+                else:
+                    logger.error("Rate limit retries exhausted — returning HOLD")
+                    return [{"action": "HOLD", "symbol": None, "quantity": None,
+                             "stop_loss_price": None, "take_profit_price": None,
+                             "reason": "Rate limit — too many concurrent sessions",
+                             "confidence": "low", "flags": []}]
 
             # Check if Claude wants to use tools
             if response.stop_reason == "tool_use":
