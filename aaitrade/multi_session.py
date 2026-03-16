@@ -205,18 +205,28 @@ class MultiSessionRunner:
                         # Small pause between sessions to be nice to APIs
                         time.sleep(5)
 
-                # End of day: 3:30 - 3:45 PM IST
-                elif now.hour == 15 and 30 <= now.minute < 45:
+                # End of day: 3:15 PM+ IST — run EOD after last trading cycle
+                now_check = datetime.now(_IST)
+                if now_check.hour >= 15 and now_check.minute >= 15:
+                    logger.info("Market closing — running end-of-day processing...")
                     for name, manager in self._managers:
                         try:
                             manager._end_of_day()
                         except Exception as e:
                             logger.error(f"EOD failed for '{name}': {e}", exc_info=True)
 
-                # Sleep until next check
+                    # Sleep until tomorrow morning
+                    tomorrow = (now_check + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+                    sleep_secs = (tomorrow - now_check).total_seconds()
+                    if sleep_secs > 0:
+                        logger.info(f"Market closed. Sleeping {sleep_secs / 3600:.1f} hours until tomorrow morning...")
+                        time.sleep(sleep_secs)
+                    continue
+
+                # Sleep until next cycle
                 now = datetime.now(_IST)
                 market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-                market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+                market_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
 
                 if market_open <= now <= market_close:
                     # Use the first session's interval (they should all be the same)
