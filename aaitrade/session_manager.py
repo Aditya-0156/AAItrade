@@ -143,24 +143,31 @@ class SessionManager:
         # Reporter
         self.reporter = Reporter(self.config, self.session_id, self.claude)
 
-        # Kite client (if keys available)
-        if self.keys.kite_api_key and self.keys.kite_access_token:
-            try:
-                from kiteconnect import KiteConnect
-                kite = KiteConnect(api_key=self.keys.kite_api_key)
-                kite.set_access_token(self.keys.kite_access_token)
+        # Kite client (REQUIRED — no fallback to yfinance)
+        if not self.keys.kite_api_key or not self.keys.kite_access_token:
+            raise RuntimeError(
+                "KITE_API_KEY and KITE_ACCESS_TOKEN must be set in .env. "
+                "Run refresh_token.py to get a fresh token."
+            )
 
-                from aaitrade.tools.market import set_kite_client as set_market_kite
-                from aaitrade.tools.watchlist_tools import set_kite_client as set_watchlist_kite
-                from aaitrade.executor import set_kite_client as set_executor_kite
+        try:
+            from kiteconnect import KiteConnect
+            kite = KiteConnect(api_key=self.keys.kite_api_key)
+            kite.set_access_token(self.keys.kite_access_token)
 
-                set_market_kite(kite)
-                set_watchlist_kite(kite)
-                set_executor_kite(kite)
-                logger.info("Kite Connect initialized")
-            except Exception as e:
-                logger.warning(f"Kite Connect initialization failed: {e}")
-                logger.warning("Market data tools will not work without Kite")
+            # Validate token works before proceeding
+            profile = kite.profile()
+            logger.info(f"Kite Connect initialized — logged in as {profile['user_name']}")
+
+            from aaitrade.tools.market import set_kite_client as set_market_kite
+            from aaitrade.tools.watchlist_tools import set_kite_client as set_watchlist_kite
+            from aaitrade.executor import set_kite_client as set_executor_kite
+
+            set_market_kite(kite)
+            set_watchlist_kite(kite)
+            set_executor_kite(kite)
+        except Exception as e:
+            raise RuntimeError(f"Kite Connect initialization failed: {e}. Check .env keys.")
 
         # NewsAPI client
         if self.keys.newsapi:

@@ -51,15 +51,20 @@ def validate_token(access_token: str) -> str:
 
 
 def update_server_env(access_token: str):
-    """SSH into server and update KITE_ACCESS_TOKEN in .env"""
-    sed_cmd = f"sed -i 's/^KITE_ACCESS_TOKEN=.*/KITE_ACCESS_TOKEN={access_token}/' {SERVER_ENV}"
+    """SSH into server and update all KITE_ keys in .env"""
+    # Update all 3 Kite keys — API key and secret are constant but ensure they're set
+    sed_cmds = " && ".join([
+        f"sed -i 's/^KITE_API_KEY=.*/KITE_API_KEY={API_KEY}/' {SERVER_ENV}",
+        f"sed -i 's/^KITE_API_SECRET=.*/KITE_API_SECRET={API_SECRET}/' {SERVER_ENV}",
+        f"sed -i 's/^KITE_ACCESS_TOKEN=.*/KITE_ACCESS_TOKEN={access_token}/' {SERVER_ENV}",
+    ])
 
     ssh = [
         "ssh",
         "-i", SERVER_SSH_KEY,
         "-o", "StrictHostKeyChecking=no",
         f"{SERVER_USER}@{SERVER_HOST}",
-        sed_cmd,
+        sed_cmds,
     ]
 
     result = subprocess.run(ssh, capture_output=True, text=True)
