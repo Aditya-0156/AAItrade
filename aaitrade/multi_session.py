@@ -238,12 +238,8 @@ class MultiSessionRunner:
                     time.sleep(60)
 
         except KeyboardInterrupt:
-            logger.info("Interrupted — completing all sessions")
-            for name, manager in self._managers:
-                try:
-                    manager._complete_session()
-                except Exception:
-                    pass
+            logger.info("Interrupted — sessions left active in DB for recovery on restart")
+            # Do NOT complete sessions — leave them active so they can be recovered
 
     def wait(self):
         """No-op for compatibility — sequential loop runs in main thread."""
