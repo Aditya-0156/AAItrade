@@ -150,14 +150,20 @@ def _yf_market_snapshot() -> dict:
 def _kite_get_quote(symbol: str) -> dict:
     """Get current quote via Kite."""
     instrument = f"NSE:{symbol}"
-    quote = _kite.quote(instrument)
+    try:
+        quote = _kite.quote(instrument)
+    except Exception as e:
+        return {"error": f"Kite quote failed for {symbol}: {e}", "symbol": symbol}
+    if instrument not in quote:
+        return {"error": f"Symbol {symbol} not found in Kite response", "symbol": symbol}
     data = quote[instrument]
     ohlc = data.get("ohlc", {})
+    close = ohlc.get("close", 0) or 1  # Avoid division by zero
     return {
         "symbol": symbol,
         "last_price": data.get("last_price"),
         "change_percent": round(
-            ((data.get("last_price", 0) - ohlc.get("close", 1)) / ohlc.get("close", 1)) * 100, 2,
+            ((data.get("last_price", 0) - close) / close) * 100, 2,
         ),
         "volume": data.get("volume"),
         "open": ohlc.get("open"),
@@ -189,12 +195,16 @@ def _kite_get_history(symbol: str, days: int) -> dict:
     to_date = datetime.now()
     from_date = to_date - timedelta(days=days + 10)
 
-    candles = _kite.historical_data(
-        instrument_token=token,
-        from_date=from_date.strftime("%Y-%m-%d"),
-        to_date=to_date.strftime("%Y-%m-%d"),
-        interval="day",
-    )
+    try:
+        candles = _kite.historical_data(
+            instrument_token=token,
+            from_date=from_date.strftime("%Y-%m-%d"),
+            to_date=to_date.strftime("%Y-%m-%d"),
+            interval="day",
+        )
+    except Exception as e:
+        return {"error": f"Kite historical data failed for {symbol}: {e}"}
+
     candles = candles[-days:]
 
     return {
@@ -216,7 +226,10 @@ def _kite_get_history(symbol: str, days: int) -> dict:
 
 def _kite_market_snapshot() -> dict:
     """Get Nifty 50 and Bank Nifty via Kite."""
-    indices = _kite.quote(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
+    try:
+        indices = _kite.quote(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
+    except Exception as e:
+        return {"error": f"Kite market snapshot failed: {e}"}
     nifty = indices.get("NSE:NIFTY 50", {})
     banknifty = indices.get("NSE:NIFTY BANK", {})
     nifty_ohlc = nifty.get("ohlc", {})

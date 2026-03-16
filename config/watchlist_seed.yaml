@@ -112,11 +112,11 @@ watchlist:
   # More volatile, news-driven. Requires closer thesis monitoring.
   # All NSE-listed as of early 2025.
 
-  - symbol: ZOMATO
-    company: Zomato Ltd
+  - symbol: ETERNAL
+    company: Zomato Ltd (Eternal)
     sector: Food Delivery / Quick Commerce
     notes: Food delivery + Blinkit quick commerce. High growth, path to profitability.
-           Very news and sentiment sensitive. NSE symbol is ZOMATO (not ETERNAL).
+           Very news and sentiment sensitive. NSE symbol changed from ZOMATO to ETERNAL.
 
   - symbol: SWIGGY
     company: Swiggy

@@ -280,7 +280,7 @@ _COMPANY_MAP = {
     "TATASTEEL": "Tata Steel",
     "ADANIPORTS": "Adani Ports",
     "BHARTIARTL": "Bharti Airtel",
-    "ZOMATO": "Zomato",
+    "ETERNAL": "Zomato",
     "SWIGGY": "Swiggy",
     "PAYTM": "Paytm",
     "NYKAA": "Nykaa",

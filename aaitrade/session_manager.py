@@ -95,6 +95,9 @@ class SessionManager:
         # Load tool registry
         load_all_tools()
 
+        # Validate watchlist symbols against Kite instrument cache after init
+        # (deferred to after _init_clients so Kite cache is populated)
+
         # Disable watchlist adjustment tools if not allowed
         if not self.config.allow_watchlist_adjustment:
             disable_tool("add_to_watchlist")
@@ -111,6 +114,9 @@ class SessionManager:
         # Initialize clients
         self._init_clients()
 
+        # Validate watchlist symbols against Kite instrument cache
+        self._validate_watchlist()
+
         # Notify via Telegram
         bot = get_bot()
         if bot:
@@ -123,6 +129,37 @@ class SessionManager:
             )
 
         logger.info(f"Session {self.session_id} started successfully")
+
+    def _validate_watchlist(self):
+        """Check watchlist symbols against Kite instrument cache. Log warnings for invalid ones."""
+        from aaitrade.tools.market import _instrument_token_cache
+        if not _instrument_token_cache:
+            logger.warning("Kite instrument cache not available — skipping watchlist validation")
+            return
+
+        entries = db.query(
+            "SELECT id, symbol FROM watchlist WHERE session_id = ? AND removed_at IS NULL",
+            (self.session_id,),
+        )
+        invalid = []
+        for entry in entries:
+            if entry["symbol"] not in _instrument_token_cache:
+                invalid.append(entry["symbol"])
+                logger.warning(f"Watchlist symbol '{entry['symbol']}' NOT found in Kite NSE instruments!")
+
+        if invalid:
+            logger.warning(
+                f"{len(invalid)} watchlist symbol(s) not found on Kite: {', '.join(invalid)}. "
+                f"These will fail at trade time. Fix watchlist_seed.yaml."
+            )
+            bot = get_bot()
+            if bot:
+                bot.send(
+                    f"⚠️ {len(invalid)} watchlist symbols not found on Kite: "
+                    f"{', '.join(invalid)}. Fix config/watchlist_seed.yaml."
+                )
+        else:
+            logger.info(f"All {len(entries)} watchlist symbols validated against Kite ✓")
 
     def _init_clients(self):
         """Initialize API clients."""
@@ -152,7 +189,7 @@ class SessionManager:
 
         try:
             from kiteconnect import KiteConnect
-            kite = KiteConnect(api_key=self.keys.kite_api_key)
+            kite = KiteConnect(api_key=self.keys.kite_api_key, timeout=15)
             kite.set_access_token(self.keys.kite_access_token)
 
             # Validate token works before proceeding

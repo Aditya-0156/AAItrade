@@ -14,7 +14,7 @@ sessions:
     execution: paper
     days: 5
     watchlist: config/watchlist_seed.yaml
-    interval: 240
+    interval: 180
 
   # ── Aggressive ─────────────────────────────────────────────────────────
   - name: aggressive-5d
@@ -23,7 +23,7 @@ sessions:
     execution: paper
     days: 5
     watchlist: config/watchlist_seed.yaml
-    interval: 240
+    interval: 180
 
   # ── Safe baseline ───────────────────────────────────────────────────────
   - name: safe-5d
@@ -32,5 +32,5 @@ sessions:
     execution: paper
     days: 5
     watchlist: config/watchlist_seed.yaml
-    interval: 240
+    interval: 180
     watchlist_adjust: false

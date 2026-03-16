@@ -113,28 +113,35 @@ class MultiSessionRunner:
             disable_tool("add_to_watchlist")
             disable_tool("remove_from_watchlist")
 
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
-        portfolio_tools.set_session_id(manager.session_id)
-        memory.set_session_id(manager.session_id)
-        journal.set_session_id(manager.session_id)
-        watchlist_tools.set_session_id(manager.session_id)
-        session_memory.set_session_id(manager.session_id)
+        self._set_tool_context(manager)
 
         logger.info(f"'{name}' recovered (id={session_id})")
         return manager
 
     def _run_sequential_loop(self):
-        """Main loop: run one cycle per session sequentially, then sleep."""
+        """Main loop: run one cycle per session sequentially, then sleep.
+
+        Daily rhythm (IST):
+        - Before 9:00: sleep 60s, wait for pre-market
+        - 9:00-9:15: fetch macro news (once per day)
+        - 9:30-15:15: trading window — run cycles, then sleep `interval` min
+        - 15:15+: run EOD (once per day), then sleep until tomorrow 8:55 AM
+        """
         from aaitrade.holidays import is_trading_day
         from aaitrade.telegram_bot import get_bot
 
         logger.info("Starting sequential trading loop")
 
+        # Guards: track what we've done today so we don't repeat
+        _macro_fetched_date: str | None = None
+        _eod_done_date: str | None = None
+
         try:
             while True:
                 now = datetime.now(_IST)
+                today_str = now.strftime("%Y-%m-%d")
 
-                # Check if all sessions are done
+                # ── Check if all sessions are done ──
                 all_done = True
                 for name, manager in self._managers:
                     session = db.query_one(
@@ -147,31 +154,41 @@ class MultiSessionRunner:
 
                 if all_done:
                     logger.info("All sessions completed.")
+                    bot = get_bot()
+                    if bot:
+                        bot.send("✅ All sessions completed. Trading run finished.")
                     break
 
-                # Holiday/weekend check
+                # ── Holiday / weekend check ──
                 if not is_trading_day(now.date()):
                     logger.info(f"{now.date()} is not a trading day. Sleeping until tomorrow...")
-                    tomorrow = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
-                    sleep_secs = (tomorrow - now).total_seconds()
-                    if sleep_secs > 0:
-                        logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours")
-                        time.sleep(sleep_secs)
+                    self._sleep_until_tomorrow(now)
                     continue
 
-                # Pre-market: fetch macro news at 9:00-9:05 AM IST
-                if now.hour == 9 and now.minute < 5:
+                # ── Pre-market: fetch macro news once per day at 9:00+ ──
+                if now.hour >= 9 and _macro_fetched_date != today_str:
+                    _macro_fetched_date = today_str
                     logger.info("Pre-market: fetching macro news...")
                     from aaitrade.tools.news import get_macro_news
                     try:
                         get_macro_news()
+                        logger.info("Macro news fetched successfully.")
                     except Exception as e:
                         logger.error(f"Macro news fetch failed: {e}")
 
-                # Trading window: 9:30 AM to 3:15 PM IST
+                # ── Before trading window: wait ──
                 safe_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
                 safe_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
 
+                if now < safe_open:
+                    # Before 9:30 — poll every 60s
+                    sleep_secs = min(60, (safe_open - now).total_seconds())
+                    if sleep_secs > 5:
+                        logger.debug(f"Waiting for market open (9:30 AM IST). {sleep_secs:.0f}s...")
+                        time.sleep(sleep_secs)
+                    continue
+
+                # ── Trading window: 9:30 AM - 3:15 PM ──
                 if safe_open <= now <= safe_close:
                     # Run one cycle for each active session, sequentially
                     for name, manager in self._managers:
@@ -186,12 +203,7 @@ class MultiSessionRunner:
                             continue
 
                         # Set session-specific tool context
-                        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
-                        portfolio_tools.set_session_id(manager.session_id)
-                        memory.set_session_id(manager.session_id)
-                        journal.set_session_id(manager.session_id)
-                        watchlist_tools.set_session_id(manager.session_id)
-                        session_memory.set_session_id(manager.session_id)
+                        self._set_tool_context(manager)
 
                         logger.info(f"── Running cycle for '{name}' (session {manager.session_id}) ──")
                         try:
@@ -205,40 +217,66 @@ class MultiSessionRunner:
                         # Small pause between sessions to be nice to APIs
                         time.sleep(5)
 
-                # End of day: 3:15 PM+ IST — run EOD after last trading cycle
-                now_check = datetime.now(_IST)
-                if now_check.hour >= 15 and now_check.minute >= 15:
+                    # After all sessions done this cycle — sleep until next cycle
+                    now_after = datetime.now(_IST)
+                    next_safe_close = now_after.replace(hour=15, minute=15, second=0, microsecond=0)
+
+                    if now_after < next_safe_close:
+                        interval = self._managers[0][1].config.decision_interval_minutes
+                        # Don't sleep past 3:15 PM
+                        max_sleep = (next_safe_close - now_after).total_seconds()
+                        sleep_secs = min(interval * 60, max_sleep)
+                        logger.info(f"All sessions done this cycle. Sleeping {sleep_secs / 60:.0f} min until next cycle...")
+                        time.sleep(sleep_secs)
+                    continue
+
+                # ── After 3:15 PM: EOD processing ──
+                if now > safe_close and _eod_done_date != today_str:
+                    _eod_done_date = today_str
                     logger.info("Market closing — running end-of-day processing...")
                     for name, manager in self._managers:
+                        self._set_tool_context(manager)
                         try:
                             manager._end_of_day()
                         except Exception as e:
                             logger.error(f"EOD failed for '{name}': {e}", exc_info=True)
 
-                    # Sleep until tomorrow morning
-                    tomorrow = (now_check + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
-                    sleep_secs = (tomorrow - now_check).total_seconds()
-                    if sleep_secs > 0:
-                        logger.info(f"Market closed. Sleeping {sleep_secs / 3600:.1f} hours until tomorrow morning...")
-                        time.sleep(sleep_secs)
-                    continue
+                    # Check if any session just hit its last day — complete it
+                    for name, manager in self._managers:
+                        session = db.query_one(
+                            "SELECT status, current_day, total_days FROM sessions WHERE id = ?",
+                            (manager.session_id,),
+                        )
+                        if (session and session["status"] == "active"
+                                and session["current_day"] > session["total_days"]):
+                            self._set_tool_context(manager)
+                            logger.info(f"Session '{name}' reached final day — completing...")
+                            manager._complete_session()
 
-                # Sleep until next cycle
-                now = datetime.now(_IST)
-                market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-                market_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
-
-                if market_open <= now <= market_close:
-                    # Use the first session's interval (they should all be the same)
-                    interval = self._managers[0][1].config.decision_interval_minutes
-                    logger.info(f"All sessions done this cycle. Sleeping {interval} min until next cycle...")
-                    time.sleep(interval * 60)
-                else:
-                    logger.debug("Outside market hours, checking again in 60s...")
-                    time.sleep(60)
+                # Sleep until tomorrow morning
+                self._sleep_until_tomorrow(datetime.now(_IST))
 
         except KeyboardInterrupt:
             logger.info("Interrupted — sessions left active in DB for recovery on restart")
+
+    @staticmethod
+    def _set_tool_context(manager: SessionManager):
+        """Set all tool modules to the given session's context."""
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+        portfolio_tools.set_session_id(manager.session_id)
+        memory.set_session_id(manager.session_id)
+        journal.set_session_id(manager.session_id)
+        watchlist_tools.set_session_id(manager.session_id)
+        session_memory.set_session_id(manager.session_id)
+
+    @staticmethod
+    def _sleep_until_tomorrow(now: datetime):
+        """Sleep until 8:55 AM IST next day."""
+        tomorrow = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+        sleep_secs = (tomorrow - now).total_seconds()
+        if sleep_secs > 0:
+            logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours until tomorrow morning...")
+            time.sleep(sleep_secs)
             # Do NOT complete sessions — leave them active so they can be recovered
 
     def wait(self):
