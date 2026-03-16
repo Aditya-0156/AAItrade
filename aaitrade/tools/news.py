@@ -53,38 +53,20 @@ def _newsapi_check_and_count() -> bool:
 
 
 def _summarize_articles(articles: list[dict], context: str = "") -> str:
-    """Summarize a list of news articles to 3-5 key sentences using Haiku."""
+    """Return concise article titles+descriptions — no LLM call needed."""
     if not articles:
         return "No relevant news found."
 
-    # Build text from articles
-    article_texts = []
-    for a in articles[:5]:  # max 5 articles
-        title = a.get("title", "")
+    lines = []
+    for a in articles[:5]:
+        title = a.get("title", "No title")
         desc = a.get("description", "") or ""
-        article_texts.append(f"- {title}. {desc}")
+        # Truncate description to 80 chars to keep input small
+        if desc and len(desc) > 80:
+            desc = desc[:80] + "..."
+        lines.append(f"- {title}" + (f" — {desc}" if desc else ""))
 
-    text = "\n".join(article_texts)
-
-    if _anthropic_client:
-        try:
-            response = _anthropic_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=300,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Summarize these news items into 3-5 concise bullet points "
-                        f"relevant to stock trading decisions. {context}\n\n{text}"
-                    ),
-                }],
-            )
-            return response.content[0].text
-        except Exception as e:
-            logger.warning(f"Haiku summarization failed, returning raw: {e}")
-
-    # Fallback: return titles only
-    return "\n".join(f"- {a.get('title', 'No title')}" for a in articles[:5])
+    return "\n".join(lines)
 
 
 def _check_cache(category: str, key: str) -> str | None:
