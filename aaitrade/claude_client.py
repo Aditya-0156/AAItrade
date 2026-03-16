@@ -218,12 +218,13 @@ class ClaudeClient:
         summary_prompt: str,
     ) -> str:
         """Generate end-of-day summary (no tools needed)."""
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": summary_prompt}],
-        )
+        with _claude_lock:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2048,
+                system=system_prompt,
+                messages=[{"role": "user", "content": summary_prompt}],
+            )
 
         for block in response.content:
             if hasattr(block, "text"):

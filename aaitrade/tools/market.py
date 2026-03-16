@@ -9,6 +9,7 @@ NSE symbols are automatically suffixed with .NS for Yahoo Finance.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -16,6 +17,9 @@ import pandas as pd
 from aaitrade.tools import register_tool
 
 logger = logging.getLogger(__name__)
+
+# Global lock for all Kite API calls (thread-safe across sessions)
+_kite_lock = threading.Lock()
 
 # Kite client is injected at startup via set_kite_client() — used for live mode
 _kite = None
@@ -146,7 +150,8 @@ def _yf_market_snapshot() -> dict:
 def _kite_get_quote(symbol: str) -> dict:
     """Get current quote via Kite."""
     instrument = f"NSE:{symbol}"
-    quote = _kite.quote(instrument)
+    with _kite_lock:
+        quote = _kite.quote(instrument)
     data = quote[instrument]
     ohlc = data.get("ohlc", {})
     return {
@@ -170,7 +175,8 @@ def _kite_get_history(symbol: str, days: int) -> dict:
     token = _instrument_token_cache.get(symbol)
     if token is None:
         try:
-            instruments = _kite.instruments("NSE")
+            with _kite_lock:
+                instruments = _kite.instruments("NSE")
             for inst in instruments:
                 if inst["tradingsymbol"] == symbol:
                     token = inst["instrument_token"]
@@ -185,12 +191,13 @@ def _kite_get_history(symbol: str, days: int) -> dict:
     to_date = datetime.now()
     from_date = to_date - timedelta(days=days + 10)
 
-    candles = _kite.historical_data(
-        instrument_token=token,
-        from_date=from_date.strftime("%Y-%m-%d"),
-        to_date=to_date.strftime("%Y-%m-%d"),
-        interval="day",
-    )
+    with _kite_lock:
+        candles = _kite.historical_data(
+            instrument_token=token,
+            from_date=from_date.strftime("%Y-%m-%d"),
+            to_date=to_date.strftime("%Y-%m-%d"),
+            interval="day",
+        )
     candles = candles[-days:]
 
     return {
@@ -212,7 +219,8 @@ def _kite_get_history(symbol: str, days: int) -> dict:
 
 def _kite_market_snapshot() -> dict:
     """Get Nifty 50 and Bank Nifty via Kite."""
-    indices = _kite.quote(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
+    with _kite_lock:
+        indices = _kite.quote(["NSE:NIFTY 50", "NSE:NIFTY BANK"])
     nifty = indices.get("NSE:NIFTY 50", {})
     banknifty = indices.get("NSE:NIFTY BANK", {})
     nifty_ohlc = nifty.get("ohlc", {})

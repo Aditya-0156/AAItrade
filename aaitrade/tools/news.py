@@ -8,12 +8,16 @@ Caching: stock news 1h, sector news 2h, macro news all day.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 
 from aaitrade.tools import register_tool
 from aaitrade import db
 
 logger = logging.getLogger(__name__)
+
+# Global lock for NewsAPI calls
+_newsapi_lock = threading.Lock()
 
 # NewsAPI client injected at startup
 _newsapi = None
@@ -139,13 +143,14 @@ def get_stock_news(symbol: str, hours: int = 24) -> dict:
 
     try:
         from_date = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
-        result = _newsapi.get_everything(
-            q=f'"{symbol}" OR "{_symbol_to_company(symbol)}"',
-            from_param=from_date,
-            language="en",
-            sort_by="relevancy",
-            page_size=5,
-        )
+        with _newsapi_lock:
+            result = _newsapi.get_everything(
+                q=f'"{symbol}" OR "{_symbol_to_company(symbol)}"',
+                from_param=from_date,
+                language="en",
+                sort_by="relevancy",
+                page_size=5,
+            )
         articles = result.get("articles", [])
         summary = _summarize_articles(articles, context=f"Stock: {symbol}")
         _write_cache("stock", symbol, summary, hours=1)
@@ -188,13 +193,14 @@ def get_sector_news(sector: str) -> dict:
         }
 
     try:
-        result = _newsapi.get_everything(
-            q=f"India {sector} sector stocks market",
-            from_param=(datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),
-            language="en",
-            sort_by="relevancy",
-            page_size=5,
-        )
+        with _newsapi_lock:
+            result = _newsapi.get_everything(
+                q=f"India {sector} sector stocks market",
+                from_param=(datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),
+                language="en",
+                sort_by="relevancy",
+                page_size=5,
+            )
         articles = result.get("articles", [])
         summary = _summarize_articles(articles, context=f"Sector: {sector}")
         _write_cache("sector", sector, summary, hours=2)
@@ -233,11 +239,12 @@ def get_macro_news() -> dict:
         }
 
     try:
-        result = _newsapi.get_top_headlines(
-            category="business",
-            language="en",
-            page_size=10,
-        )
+        with _newsapi_lock:
+            result = _newsapi.get_top_headlines(
+                category="business",
+                language="en",
+                page_size=10,
+            )
         articles = result.get("articles", [])
         summary = _summarize_articles(
             articles,
