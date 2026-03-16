@@ -1,21 +1,19 @@
-"""Multi-session runner — manages concurrent trading sessions.
+"""Multi-session runner — manages multiple trading sessions sequentially.
 
-Loads session configs from a YAML file and runs them in parallel threads.
+Loads session configs from a YAML file and runs them one at a time.
+Each cycle: session 1 trades → session 2 trades → session 3 trades → all sleep.
 
 Smart restart logic:
 - If a session name already exists in DB as active/paused → recover it
 - If a session name is new → start it fresh
 - Sessions removed from YAML are left alone in DB (not touched)
-
-This means you can add sessions to the YAML and restart the process —
-existing sessions resume from where they left off, new ones start fresh.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +29,8 @@ from aaitrade.config import (
 from aaitrade.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def load_multi_config(path: str | Path) -> list[dict[str, Any]]:
@@ -56,20 +56,14 @@ def _build_config(entry: dict[str, Any]) -> SessionConfig:
 
 
 class MultiSessionRunner:
-    """Runs multiple trading sessions concurrently."""
+    """Runs multiple trading sessions sequentially (no threads)."""
 
     def __init__(self, keys: APIKeys):
         self.keys = keys
-        self._threads: dict[str, threading.Thread] = {}
-        self._managers: dict[str, SessionManager] = {}
+        self._managers: list[tuple[str, SessionManager]] = []
 
     def start_from_config(self, config_path: str | Path):
-        """Start or recover sessions from a multi-session YAML config.
-
-        For each session in the YAML:
-        - If a session with that name exists in DB as active/paused → recover it
-        - Otherwise → start a fresh session
-        """
+        """Initialize all sessions from YAML config, then run the sequential loop."""
         db.init_db()
         configs = load_multi_config(config_path)
         if not configs:
@@ -78,16 +72,11 @@ class MultiSessionRunner:
 
         logger.info(f"Loading {len(configs)} sessions from config")
 
-        for i, entry in enumerate(configs):
-            name = entry.get("name", f"session-{len(self._threads) + 1}")
+        # Initialize all sessions
+        for entry in configs:
+            name = entry.get("name", f"session-{len(self._managers) + 1}")
             config = _build_config(entry)
 
-            # Stagger launches by 120s to avoid hitting Claude rate limits
-            if i > 0:
-                logger.info(f"Waiting 120s before starting '{name}' (rate limit stagger)...")
-                time.sleep(120)
-
-            # Check if this named session is already active/paused in DB
             existing = db.query_one(
                 "SELECT id, status FROM sessions WHERE name = ? AND status IN ('active', 'paused') ORDER BY id DESC LIMIT 1",
                 (name,),
@@ -95,108 +84,169 @@ class MultiSessionRunner:
 
             if existing:
                 logger.info(f"'{name}' found in DB (id={existing['id']}, status={existing['status']}) — recovering")
-                self._recover_named(name, config, existing["id"], existing["status"])
+                manager = self._init_recovered(name, config, existing["id"])
             else:
                 logger.info(f"'{name}' not in DB — starting fresh")
-                self._start_session(name, config)
+                manager = self._init_new(name, config)
 
-    def recover_active_sessions(self):
-        """Recover ALL active/paused sessions from DB (used with --recover flag).
+            self._managers.append((name, manager))
 
-        This is the crash recovery path — finds every session marked active/paused
-        regardless of name and resumes them all.
-        """
-        db.init_db()
-        active = db.query(
-            "SELECT id, name, execution_mode, trading_mode, starting_capital, "
-            "total_days, watchlist_path, allow_watchlist_adjustment, status "
-            "FROM sessions WHERE status IN ('active', 'paused')"
-        )
+        # Run the sequential loop
+        self._run_sequential_loop()
 
-        if not active:
-            logger.info("No sessions to recover")
-            return
+    def _init_new(self, name: str, config: SessionConfig) -> SessionManager:
+        """Initialize a new session (creates DB record, loads tools)."""
+        manager = SessionManager(config, self.keys, name=name)
+        manager.start()
+        return manager
 
-        logger.info(f"Recovering {len(active)} sessions from DB")
-
-        for s in active:
-            name = s["name"] or f"recovered-{s['id']}"
-            config = SessionConfig(
-                execution_mode=ExecutionMode(s["execution_mode"]),
-                trading_mode=TradingMode(s["trading_mode"]),
-                starting_capital=s["starting_capital"],
-                total_days=s["total_days"],
-                watchlist_path=Path(s["watchlist_path"]),
-                allow_watchlist_adjustment=bool(s["allow_watchlist_adjustment"]),
-            )
-            self._recover_named(name, config, s["id"], s["status"])
-
-    def _recover_named(self, name: str, config: SessionConfig, session_id: int, status: str):
-        """Recover a specific session by its DB id."""
+    def _init_recovered(self, name: str, config: SessionConfig, session_id: int) -> SessionManager:
+        """Initialize a recovered session from DB."""
         manager = SessionManager(config, self.keys, name=name)
         manager.session_id = session_id
         manager._recovered = True
-        self._managers[name] = manager
+        manager._init_clients()
 
-        thread = threading.Thread(
-            target=self._run_recovered,
-            args=(name, manager),
-            daemon=True,
-        )
-        thread.start()
-        self._threads[name] = thread
-        logger.info(f"Recovering '{name}' (id={session_id}, status={status})")
+        from aaitrade.tools import load_all_tools, disable_tool
+        load_all_tools()
+        if not manager.config.allow_watchlist_adjustment:
+            disable_tool("add_to_watchlist")
+            disable_tool("remove_from_watchlist")
 
-    def _run_recovered(self, name: str, manager: SessionManager):
-        """Resume a recovered session without creating a new DB record."""
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+        portfolio_tools.set_session_id(manager.session_id)
+        memory.set_session_id(manager.session_id)
+        journal.set_session_id(manager.session_id)
+        watchlist_tools.set_session_id(manager.session_id)
+        session_memory.set_session_id(manager.session_id)
+
+        logger.info(f"'{name}' recovered (id={session_id})")
+        return manager
+
+    def _run_sequential_loop(self):
+        """Main loop: run one cycle per session sequentially, then sleep."""
+        from aaitrade.holidays import is_trading_day
+        from aaitrade.telegram_bot import get_bot
+
+        logger.info("Starting sequential trading loop")
+
         try:
-            manager._init_clients()
+            while True:
+                now = datetime.now(_IST)
 
-            from aaitrade.tools import load_all_tools, disable_tool
-            load_all_tools()
-            if not manager.config.allow_watchlist_adjustment:
-                disable_tool("add_to_watchlist")
-                disable_tool("remove_from_watchlist")
+                # Check if all sessions are done
+                all_done = True
+                for name, manager in self._managers:
+                    session = db.query_one(
+                        "SELECT status, current_day, total_days FROM sessions WHERE id = ?",
+                        (manager.session_id,),
+                    )
+                    if session and session["status"] == "active" and session["current_day"] <= session["total_days"]:
+                        all_done = False
+                        break
 
-            from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
-            portfolio_tools.set_session_id(manager.session_id)
-            memory.set_session_id(manager.session_id)
-            journal.set_session_id(manager.session_id)
-            watchlist_tools.set_session_id(manager.session_id)
-            session_memory.set_session_id(manager.session_id)
+                if all_done:
+                    logger.info("All sessions completed.")
+                    break
 
-            logger.info(f"'{name}' recovered — entering run loop")
-            manager.run()
-        except Exception as e:
-            logger.error(f"Session '{name}' crashed: {e}", exc_info=True)
+                # Holiday/weekend check
+                if not is_trading_day(now.date()):
+                    logger.info(f"{now.date()} is not a trading day. Sleeping until tomorrow...")
+                    tomorrow = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+                    sleep_secs = (tomorrow - now).total_seconds()
+                    if sleep_secs > 0:
+                        logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours")
+                        time.sleep(sleep_secs)
+                    continue
 
-    def _start_session(self, name: str, config: SessionConfig):
-        """Start a brand new session in its own thread."""
-        manager = SessionManager(config, self.keys, name=name)
-        self._managers[name] = manager
+                # Pre-market: fetch macro news at 9:00-9:05 AM IST
+                if now.hour == 9 and now.minute < 5:
+                    logger.info("Pre-market: fetching macro news...")
+                    from aaitrade.tools.news import get_macro_news
+                    try:
+                        get_macro_news()
+                    except Exception as e:
+                        logger.error(f"Macro news fetch failed: {e}")
 
-        thread = threading.Thread(
-            target=self._run_new,
-            args=(name, manager),
-            daemon=True,
-        )
-        thread.start()
-        self._threads[name] = thread
+                # Trading window: 9:30 AM to 3:15 PM IST
+                safe_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+                safe_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
 
-    def _run_new(self, name: str, manager: SessionManager):
-        """Start and run a new session (thread target)."""
-        try:
-            manager.start()
-            manager.run()
-        except Exception as e:
-            logger.error(f"Session '{name}' crashed: {e}", exc_info=True)
+                if safe_open <= now <= safe_close:
+                    # Run one cycle for each active session, sequentially
+                    for name, manager in self._managers:
+                        session = db.query_one(
+                            "SELECT status, current_day, total_days FROM sessions WHERE id = ?",
+                            (manager.session_id,),
+                        )
+                        if not session or session["status"] != "active":
+                            continue
+                        if session["current_day"] > session["total_days"]:
+                            manager._complete_session()
+                            continue
+
+                        # Set session-specific tool context
+                        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+                        portfolio_tools.set_session_id(manager.session_id)
+                        memory.set_session_id(manager.session_id)
+                        journal.set_session_id(manager.session_id)
+                        watchlist_tools.set_session_id(manager.session_id)
+                        session_memory.set_session_id(manager.session_id)
+
+                        logger.info(f"── Running cycle for '{name}' (session {manager.session_id}) ──")
+                        try:
+                            manager._run_cycle()
+                        except Exception as e:
+                            logger.error(f"Cycle failed for '{name}': {e}", exc_info=True)
+                            bot = get_bot()
+                            if bot:
+                                bot.send(f"⚠️ Cycle error in '{name}': {e}")
+
+                        # Small pause between sessions to be nice to APIs
+                        time.sleep(5)
+
+                # End of day: 3:30 - 3:45 PM IST
+                elif now.hour == 15 and 30 <= now.minute < 45:
+                    for name, manager in self._managers:
+                        try:
+                            manager._end_of_day()
+                        except Exception as e:
+                            logger.error(f"EOD failed for '{name}': {e}", exc_info=True)
+
+                # Sleep until next check
+                now = datetime.now(_IST)
+                market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+                market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+
+                if market_open <= now <= market_close:
+                    # Use the first session's interval (they should all be the same)
+                    interval = self._managers[0][1].config.decision_interval_minutes
+                    logger.info(f"All sessions done this cycle. Sleeping {interval} min until next cycle...")
+                    time.sleep(interval * 60)
+                else:
+                    logger.debug("Outside market hours, checking again in 60s...")
+                    time.sleep(60)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted — completing all sessions")
+            for name, manager in self._managers:
+                try:
+                    manager._complete_session()
+                except Exception:
+                    pass
 
     def wait(self):
-        """Block until all session threads complete."""
-        for name, thread in self._threads.items():
-            thread.join()
-            logger.info(f"Session '{name}' thread exited")
+        """No-op for compatibility — sequential loop runs in main thread."""
+        pass
 
     def get_active_sessions(self) -> list[str]:
-        """Return names of sessions with live threads."""
-        return [name for name, t in self._threads.items() if t.is_alive()]
+        """Return names of active sessions."""
+        active = []
+        for name, manager in self._managers:
+            session = db.query_one(
+                "SELECT status FROM sessions WHERE id = ?",
+                (manager.session_id,),
+            )
+            if session and session["status"] == "active":
+                active.append(name)
+        return active

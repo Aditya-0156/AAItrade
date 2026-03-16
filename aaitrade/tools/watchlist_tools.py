@@ -133,9 +133,7 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
                 company_name = symbol  # cache doesn't store names, symbol is enough
             else:
                 # Cache not ready — fall back to live fetch
-                from aaitrade.tools.market import _kite_lock
-                with _kite_lock:
-                    instruments = _kite.instruments("NSE")
+                instruments = _kite.instruments("NSE")
                 found = None
                 for inst in instruments:
                     if inst["tradingsymbol"] == symbol and inst["segment"] == "NSE":

@@ -143,8 +143,7 @@ def get_stock_news(symbol: str, hours: int = 24) -> dict:
 
     try:
         from_date = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
-        with _newsapi_lock:
-            result = _newsapi.get_everything(
+        result = _newsapi.get_everything(
                 q=f'"{symbol}" OR "{_symbol_to_company(symbol)}"',
                 from_param=from_date,
                 language="en",
@@ -193,8 +192,7 @@ def get_sector_news(sector: str) -> dict:
         }
 
     try:
-        with _newsapi_lock:
-            result = _newsapi.get_everything(
+        result = _newsapi.get_everything(
                 q=f"India {sector} sector stocks market",
                 from_param=(datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),
                 language="en",
@@ -239,8 +237,7 @@ def get_macro_news() -> dict:
         }
 
     try:
-        with _newsapi_lock:
-            result = _newsapi.get_top_headlines(
+        result = _newsapi.get_top_headlines(
                 category="business",
                 language="en",
                 page_size=10,
