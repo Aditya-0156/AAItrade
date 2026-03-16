@@ -68,7 +68,7 @@ class ClaudeClient:
                     )
                     break
                 except anthropic.RateLimitError:
-                    wait = 15 * (2 ** attempt)  # 15s, 30s, 60s, 120s
+                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s, 20s
                     logger.warning(f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/4")
                     time.sleep(wait)
                 except anthropic.BadRequestError as e:
