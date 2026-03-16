@@ -7,10 +7,12 @@ Max 2 calls per decision cycle (enforced by system prompt + session manager).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from aaitrade.tools import register_tool
 from aaitrade import db
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,7 @@ def search_web(query: str) -> dict:
             "query": query,
             "answer": answer,
             "sources": sources,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
         }
     except Exception as e:
         logger.error(f"search_web failed for query '{query}': {e}")

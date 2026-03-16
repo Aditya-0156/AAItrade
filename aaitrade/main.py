@@ -129,6 +129,13 @@ def parse_args() -> argparse.Namespace:
         help="Enable verbose/debug logging",
     )
 
+    # Test mode: shifts market hours to start from now
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Test mode: market opens 2 min from now, cycles every 5 min, 1 trading day",
+    )
+
     return parser.parse_args()
 
 
@@ -149,6 +156,16 @@ def main():
     bot = init_telegram()
     if bot:
         logger.info("Telegram bot initialized")
+
+    # ── Test mode setup ──
+    if args.test:
+        import os
+        os.environ["AAITRADE_TEST_MODE"] = "1"
+        logger.info("=" * 60)
+        logger.info("TEST MODE: Market hours shifted to start 2 min from now")
+        logger.info("  Interval: 5 min between cycles (instead of configured)")
+        logger.info("  Holiday check: DISABLED")
+        logger.info("=" * 60)
 
     # ── Multi-session mode ──
     if args.multi:

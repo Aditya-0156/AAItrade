@@ -560,9 +560,31 @@ class SessionManager:
                 )
 
     def _complete_session(self):
-        """Mark the session as completed."""
-        # Close all open positions before finalizing
-        self._close_all_positions()
+        """Mark the session as completed.
+
+        Does NOT force-sell open positions. Performance is calculated using
+        current market prices for any remaining holdings (mark-to-market).
+        """
+        # Calculate mark-to-market value of open positions for the final report
+        positions = db.query(
+            "SELECT id, symbol, quantity, avg_price FROM portfolio WHERE session_id = ? AND quantity > 0",
+            (self.session_id,),
+        )
+        if positions:
+            unrealized_pnl = 0
+            for pos in positions:
+                from aaitrade.tools.market import get_current_price
+                price_data = get_current_price(pos["symbol"])
+                if "error" not in price_data:
+                    current_price = price_data["last_price"]
+                    unrealized_pnl += (current_price - pos["avg_price"]) * pos["quantity"]
+                else:
+                    logger.warning(f"Could not get price for {pos['symbol']} at session end — using avg_price for P&L")
+
+            logger.info(
+                f"Session ending with {len(positions)} open position(s). "
+                f"Unrealized P&L: ₹{unrealized_pnl:,.2f}"
+            )
 
         db.update("sessions", self.session_id, {
             "status": "completed",

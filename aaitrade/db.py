@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 DB_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -258,5 +260,5 @@ def query_one(sql: str, params: tuple = ()) -> dict | None:
 
 
 def now_iso() -> str:
-    """Return current time as ISO 8601 string."""
-    return datetime.now().isoformat()
+    """Return current time as ISO 8601 string in IST."""
+    return datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")

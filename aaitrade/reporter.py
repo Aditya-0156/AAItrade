@@ -111,7 +111,26 @@ class Reporter:
         total_trades = len(all_sells)
         wins = sum(1 for t in all_sells if t["pnl"] and t["pnl"] > 0)
         losses = sum(1 for t in all_sells if t["pnl"] and t["pnl"] < 0)
-        total_pnl = session["current_capital"] + session["secured_profit"] - session["starting_capital"]
+        # Calculate unrealized P&L from open positions (mark-to-market)
+        open_positions = db.query(
+            "SELECT symbol, quantity, avg_price FROM portfolio WHERE session_id = ? AND quantity > 0",
+            (self.session_id,),
+        )
+        unrealized_pnl = 0
+        deployed_value = 0
+        for pos in open_positions:
+            deployed_value += pos["avg_price"] * pos["quantity"]
+            try:
+                from aaitrade.tools.market import get_current_price
+                price_data = get_current_price(pos["symbol"])
+                if "error" not in price_data:
+                    unrealized_pnl += (price_data["last_price"] - pos["avg_price"]) * pos["quantity"]
+            except Exception:
+                pass  # Use 0 for unrealized if price fetch fails
+
+        # Total P&L = realized (cash - starting + secured) + unrealized
+        realized_pnl = session["current_capital"] + session["secured_profit"] - session["starting_capital"] + deployed_value
+        total_pnl = realized_pnl + unrealized_pnl
         win_rate = wins / total_trades * 100 if total_trades > 0 else 0
 
         # Profit factor
@@ -155,9 +174,11 @@ class Reporter:
             "CAPITAL SUMMARY",
             "-" * 40,
             f"Starting capital:  ₹{session['starting_capital']:>10,.2f}",
-            f"Final capital:     ₹{session['current_capital']:>10,.2f}",
+            f"Free cash:         ₹{session['current_capital']:>10,.2f}",
+            f"Deployed (cost):   ₹{deployed_value:>10,.2f}",
+            f"Unrealized P&L:    ₹{unrealized_pnl:>+10,.2f}",
             f"Secured profit:    ₹{session['secured_profit']:>10,.2f}",
-            f"Total value:       ₹{session['current_capital'] + session['secured_profit']:>10,.2f}",
+            f"Total value:       ₹{session['current_capital'] + deployed_value + unrealized_pnl + session['secured_profit']:>10,.2f}",
             f"Net P&L:           ₹{total_pnl:>+10,.2f}  ({total_pnl / session['starting_capital'] * 100:+.2f}%)",
             "",
             "TRADE STATISTICS",

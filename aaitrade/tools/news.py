@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aaitrade.tools import register_tool
 from aaitrade import db
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ def _newsapi_check_and_count() -> bool:
     Resets the counter automatically at the start of each new calendar day.
     """
     global _newsapi_call_count, _newsapi_call_date
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(_IST).strftime("%Y-%m-%d")
     if _newsapi_call_date != today:
         _newsapi_call_count = 0
         _newsapi_call_date = today
@@ -80,7 +82,7 @@ def _check_cache(category: str, key: str) -> str | None:
         "WHERE category = ? AND key = ? ORDER BY fetched_at DESC LIMIT 1",
         (category, key),
     )
-    if row and row["expires_at"] > datetime.now().isoformat():
+    if row and row["expires_at"] > datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"):
         return row["summary"]
     return None
 
@@ -93,7 +95,7 @@ def _write_cache(category: str, key: str, summary: str, hours: int):
         "summary": summary,
         "source": "newsapi",
         "fetched_at": db.now_iso(),
-        "expires_at": (datetime.now() + timedelta(hours=hours)).isoformat(),
+        "expires_at": (datetime.now(_IST) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S"),
     })
 
 
@@ -142,7 +144,7 @@ def get_stock_news(symbol: str, hours: int = 24) -> dict:
         }
 
     try:
-        from_date = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+        from_date = (datetime.now(_IST) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
         result = _newsapi.get_everything(
                 q=f'"{symbol}" OR "{_symbol_to_company(symbol)}"',
                 from_param=from_date,
@@ -194,7 +196,7 @@ def get_sector_news(sector: str) -> dict:
     try:
         result = _newsapi.get_everything(
                 q=f"India {sector} sector stocks market",
-                from_param=(datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),
+                from_param=(datetime.now(_IST) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),
                 language="en",
                 sort_by="relevancy",
                 page_size=5,

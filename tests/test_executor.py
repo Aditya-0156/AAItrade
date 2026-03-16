@@ -117,14 +117,15 @@ class TestBuyValidations:
     def test_buy_exceeds_max_positions_rejected(self, in_memory_db, balanced_config, session_with_watchlist):
         """Fill all 5 balanced positions then try to add a 6th."""
         ex = make_executor(balanced_config, session_with_watchlist)
-        # Insert 5 open positions manually
-        for i, sym in enumerate(["RELIANCE", "TCS", "HDFCBANK", "INFY", "SBIN"]):
-            # Add to watchlist
+        # Fixture already has RELIANCE, TCS, HDFCBANK on watchlist — add INFY and SBIN
+        for sym in ["INFY", "SBIN"]:
             db.insert("watchlist", {
                 "session_id": session_with_watchlist,
                 "symbol": sym, "company": sym, "sector": "test",
                 "notes": "", "added_at": db.now_iso(), "add_reason": "test",
             })
+        # Insert 5 open positions manually
+        for sym in ["RELIANCE", "TCS", "HDFCBANK", "INFY", "SBIN"]:
             db.insert("portfolio", {
                 "session_id": session_with_watchlist,
                 "symbol": sym, "quantity": 1, "avg_price": 100,

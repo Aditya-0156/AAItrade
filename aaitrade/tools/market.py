@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 from aaitrade.tools import register_tool
 
@@ -85,7 +87,7 @@ def _yf_get_quote(symbol: str) -> dict:
         "high": round(float(hist["High"].iloc[-1]), 2),
         "low": round(float(hist["Low"].iloc[-1]), 2),
         "close": round(float(prev_close), 2),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
@@ -139,7 +141,7 @@ def _yf_market_snapshot() -> dict:
         except Exception as e:
             result[name] = {"error": str(e)}
 
-    result["timestamp"] = datetime.now().isoformat()
+    result["timestamp"] = datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")
     result["source"] = "yahoo_finance"
     return result
 
@@ -170,7 +172,7 @@ def _kite_get_quote(symbol: str) -> dict:
         "high": ohlc.get("high"),
         "low": ohlc.get("low"),
         "close": ohlc.get("close"),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
@@ -192,7 +194,7 @@ def _kite_get_history(symbol: str, days: int) -> dict:
     if token is None:
         return {"error": f"Symbol {symbol} not found on NSE"}
 
-    to_date = datetime.now()
+    to_date = datetime.now(_IST)
     from_date = to_date - timedelta(days=days + 10)
 
     try:
@@ -250,7 +252,7 @@ def _kite_market_snapshot() -> dict:
     return {
         "nifty_50": {"last_price": nifty.get("last_price"), "change_percent": nifty_change},
         "bank_nifty": {"last_price": banknifty.get("last_price"), "change_percent": banknifty_change},
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
         "source": "kite",
     }
 
