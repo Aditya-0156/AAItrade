@@ -253,8 +253,18 @@ class SessionManager:
                     self._end_of_day()
 
                 # Wait for next interval
-                sleep_seconds = self.config.decision_interval_minutes * 60
-                logger.debug(f"Sleeping {self.config.decision_interval_minutes} minutes until next cycle...")
+                now = datetime.now(_IST)
+                market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+                market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+
+                if market_open <= now <= market_close:
+                    # During market hours: use configured interval
+                    sleep_seconds = self.config.decision_interval_minutes * 60
+                    logger.debug(f"Sleeping {self.config.decision_interval_minutes} minutes until next cycle...")
+                else:
+                    # Outside market hours: check every 60 seconds so we don't miss market open
+                    sleep_seconds = 60
+                    logger.debug("Outside market hours, checking again in 60s...")
                 time.sleep(sleep_seconds)
 
         except KeyboardInterrupt:
