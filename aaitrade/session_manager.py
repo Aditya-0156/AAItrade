@@ -253,11 +253,20 @@ class SessionManager:
                     safe_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
 
                     if safe_open <= now <= safe_close:
-                        self._run_cycle()
+                        try:
+                            self._run_cycle()
+                        except Exception as e:
+                            logger.error(f"Cycle failed (will retry next interval): {e}", exc_info=True)
+                            bot = get_bot()
+                            if bot:
+                                bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}")
 
                     # Check for end-of-day (after 3:30 PM)
                 elif now.hour == 15 and now.minute >= 30 and now.minute < 45:
-                    self._end_of_day()
+                    try:
+                        self._end_of_day()
+                    except Exception as e:
+                        logger.error(f"EOD processing failed: {e}", exc_info=True)
 
                 # Wait for next interval
                 now = datetime.now(_IST)
