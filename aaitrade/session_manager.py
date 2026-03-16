@@ -156,7 +156,8 @@ class SessionManager:
             if bot:
                 bot.send(
                     f"⚠️ {len(invalid)} watchlist symbols not found on Kite: "
-                    f"{', '.join(invalid)}. Fix config/watchlist_seed.yaml."
+                    f"{', '.join(invalid)}. Fix config/watchlist_seed.yaml.",
+                    parse_mode=None,
                 )
         else:
             logger.info(f"All {len(entries)} watchlist symbols validated against Kite ✓")
@@ -164,7 +165,7 @@ class SessionManager:
     def _init_clients(self):
         """Initialize API clients."""
         # Claude client (use model from config if specified)
-        model = getattr(self.config, 'model', 'claude-sonnet-4-6')
+        model = getattr(self.config, 'model', 'claude-haiku-4-5-20251001')
         self.claude = ClaudeClient(
             api_key=self.keys.anthropic,
             model=model,

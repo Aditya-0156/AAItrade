@@ -324,6 +324,36 @@ class MultiSessionRunner:
             time.sleep(sleep_secs)
             # Do NOT complete sessions — leave them active so they can be recovered
 
+    def recover_active_sessions(self):
+        """Find and recover all active/paused sessions from DB, then run the loop."""
+        db.init_db()
+        rows = db.query(
+            "SELECT id, name, status FROM sessions WHERE status IN ('active', 'paused') ORDER BY id",
+        )
+        if not rows:
+            logger.info("No active/paused sessions found in DB to recover.")
+            return
+
+        logger.info(f"Found {len(rows)} session(s) to recover")
+
+        for row in rows:
+            name = row["name"] or f"session-{row['id']}"
+            session_id = row["id"]
+
+            # Build a default config for recovery — use balanced defaults
+            config = SessionConfig(
+                execution_mode=ExecutionMode.PAPER,
+                trading_mode=TradingMode.BALANCED,
+                starting_capital=20000,
+                total_days=14,
+                watchlist_path=Path("config/watchlist_seed.yaml"),
+            )
+
+            manager = self._init_recovered(name, config, session_id)
+            self._managers.append((name, manager))
+
+        self._run_sequential_loop()
+
     def wait(self):
         """No-op for compatibility — sequential loop runs in main thread."""
         pass

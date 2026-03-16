@@ -269,7 +269,7 @@ _COMPANY_MAP = {
     "INFY": "Infosys",
     "TCS": "Tata Consultancy",
     "WIPRO": "Wipro",
-    "TATAMOTORS": "Tata Motors",
+    "TMCV": "Tata Motors",
     "MARUTI": "Maruti Suzuki",
     "SUNPHARMA": "Sun Pharma",
     "DRREDDY": "Dr Reddy",

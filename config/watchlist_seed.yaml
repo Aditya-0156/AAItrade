@@ -43,10 +43,10 @@ watchlist:
     sector: IT
     notes: Mid-large IT. Good for sector diversification within IT.
 
-  - symbol: TATAMOTORS
-    company: Tata Motors
+  - symbol: TMCV
+    company: Tata Motors (Commercial Vehicles)
     sector: Automobile
-    notes: Covers both domestic auto and JLR (international). EV story.
+    notes: Tata Motors demerged into TMCV (commercial) and TMPV (passenger). TMCV is the flagship entity.
 
   - symbol: MARUTI
     company: Maruti Suzuki
