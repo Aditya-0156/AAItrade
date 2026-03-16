@@ -82,10 +82,10 @@ class MultiSessionRunner:
             name = entry.get("name", f"session-{len(self._threads) + 1}")
             config = _build_config(entry)
 
-            # Stagger launches by 30s to avoid hitting Claude rate limits
+            # Stagger launches by 120s to avoid hitting Claude rate limits
             if i > 0:
-                logger.info(f"Waiting 30s before starting '{name}' (rate limit stagger)...")
-                time.sleep(30)
+                logger.info(f"Waiting 120s before starting '{name}' (rate limit stagger)...")
+                time.sleep(120)
 
             # Check if this named session is already active/paused in DB
             existing = db.query_one(

@@ -276,7 +276,7 @@ class SessionManager:
                 if market_open <= now <= market_close:
                     # During market hours: use configured interval
                     sleep_seconds = self.config.decision_interval_minutes * 60
-                    logger.debug(f"Sleeping {self.config.decision_interval_minutes} minutes until next cycle...")
+                    logger.info(f"Cycle done. Sleeping {self.config.decision_interval_minutes} min until next cycle...")
                 else:
                     # Outside market hours: check every 60 seconds so we don't miss market open
                     sleep_seconds = 60
