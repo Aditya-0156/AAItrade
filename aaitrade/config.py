@@ -51,7 +51,7 @@ class RiskRules:
 
 RISK_PROFILES: dict[TradingMode, RiskRules] = {
     TradingMode.SAFE: RiskRules(
-        max_per_trade=12.0,
+        max_per_trade=15.0,  # ₹3,000 of ₹20,000
         stop_loss=2.0,
         take_profit=4.0,
         max_positions=4,
@@ -59,7 +59,7 @@ RISK_PROFILES: dict[TradingMode, RiskRules] = {
         daily_loss_limit=3.0,
     ),
     TradingMode.BALANCED: RiskRules(
-        max_per_trade=15.0,
+        max_per_trade=20.0,  # ₹4,000 of ₹20,000
         stop_loss=3.0,
         take_profit=5.0,
         max_positions=5,
@@ -67,7 +67,7 @@ RISK_PROFILES: dict[TradingMode, RiskRules] = {
         daily_loss_limit=5.0,
     ),
     TradingMode.AGGRESSIVE: RiskRules(
-        max_per_trade=20.0,
+        max_per_trade=25.0,  # ₹5,000 of ₹20,000
         stop_loss=5.0,
         take_profit=8.0,
         max_positions=6,
