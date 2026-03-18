@@ -217,25 +217,25 @@ class TestSessionMemoryAcrossCycles:
 class TestConfigRules:
     def test_safe_mode_risk_rules(self, safe_config):
         rules = safe_config.risk_rules
-        assert rules.max_per_trade == 7.0
+        assert rules.max_per_trade == 12.0
         assert rules.stop_loss == 2.0
         assert rules.take_profit == 4.0
         assert rules.max_positions == 4
-        assert rules.max_deployed == 50.0
+        assert rules.max_deployed == 90.0
         assert rules.daily_loss_limit == 3.0
 
     def test_balanced_mode_risk_rules(self, balanced_config):
         rules = balanced_config.risk_rules
-        assert rules.max_per_trade == 10.0
+        assert rules.max_per_trade == 15.0
         assert rules.stop_loss == 3.0
         assert rules.take_profit == 5.0
         assert rules.max_positions == 5
-        assert rules.max_deployed == 70.0
+        assert rules.max_deployed == 90.0
         assert rules.daily_loss_limit == 5.0
 
     def test_aggressive_mode_risk_rules(self, aggressive_config):
         rules = aggressive_config.risk_rules
-        assert rules.max_per_trade == 15.0
+        assert rules.max_per_trade == 20.0
         assert rules.stop_loss == 5.0
         assert rules.take_profit == 8.0
         assert rules.max_positions == 6

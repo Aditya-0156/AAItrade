@@ -51,23 +51,23 @@ class RiskRules:
 
 RISK_PROFILES: dict[TradingMode, RiskRules] = {
     TradingMode.SAFE: RiskRules(
-        max_per_trade=7.0,
+        max_per_trade=12.0,
         stop_loss=2.0,
         take_profit=4.0,
         max_positions=4,
-        max_deployed=50.0,
+        max_deployed=90.0,
         daily_loss_limit=3.0,
     ),
     TradingMode.BALANCED: RiskRules(
-        max_per_trade=10.0,
+        max_per_trade=15.0,
         stop_loss=3.0,
         take_profit=5.0,
         max_positions=5,
-        max_deployed=70.0,
+        max_deployed=90.0,
         daily_loss_limit=5.0,
     ),
     TradingMode.AGGRESSIVE: RiskRules(
-        max_per_trade=15.0,
+        max_per_trade=20.0,
         stop_loss=5.0,
         take_profit=8.0,
         max_positions=6,
@@ -155,7 +155,7 @@ class SessionConfig:
     watchlist_path: str | Path
     allow_watchlist_adjustment: bool = True
     decision_interval_minutes: int = 15
-    max_tool_calls_per_cycle: int = 8
+    max_tool_calls_per_cycle: int = 16
     max_web_searches_per_cycle: int = 2
     model: str = "claude-haiku-4-5-20251001"  # Default Haiku for cost (~73% cheaper); override per-session if needed
 

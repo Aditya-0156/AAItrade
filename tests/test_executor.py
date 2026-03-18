@@ -97,19 +97,19 @@ class TestBuyValidations:
         assert "price" in result["reason"].lower()
 
     def test_buy_exceeds_max_per_trade_auto_adjusts_quantity(self, in_memory_db, balanced_config, session_with_watchlist):
-        """Balanced mode: max 10% of ₹20,000 = ₹2,000 per trade.
+        """Balanced mode: max 15% of ₹20,000 = ₹3,000 per trade.
         Buying 100 shares at ₹1,000 = ₹100,000 — should be auto-reduced."""
         ex = make_executor(balanced_config, session_with_watchlist)
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 1000)):
             result = ex.execute(buy("RELIANCE", 100))
         # Should execute with adjusted quantity, not reject
         assert result["status"] == "executed"
-        assert result["quantity"] <= 2  # ₹2,000 / ₹1,000 = 2 shares
+        assert result["quantity"] <= 3  # ₹3,000 / ₹1,000 = 3 shares
 
     def test_buy_exceeds_max_per_trade_and_cant_reduce_rejected(self, in_memory_db, balanced_config, session_with_watchlist):
         """Price so high that even 1 share exceeds max_per_trade."""
         ex = make_executor(balanced_config, session_with_watchlist)
-        # ₹20,000 capital × 10% = ₹2,000 limit. Price ₹5,000 = 1 share = ₹5,000 > limit
+        # ₹20,000 capital × 15% = ₹3,000 limit. Price ₹5,000 = 1 share = ₹5,000 > limit
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 5000)):
             result = ex.execute(buy("RELIANCE", 10))
         assert result["status"] == "rejected"
@@ -144,12 +144,12 @@ class TestBuyValidations:
         assert "max" in result["reason"].lower()
 
     def test_buy_exceeds_max_deployed_rejected(self, in_memory_db, balanced_config, session_with_watchlist):
-        """Deploy 70% (max for balanced) then try to add more."""
+        """Deploy 90% (max for balanced) then try to add more."""
         ex = make_executor(balanced_config, session_with_watchlist)
-        # Simulate ₹14,000 already deployed (70% of ₹20,000)
+        # Simulate ₹18,000 already deployed (90% of ₹20,000)
         db.insert("portfolio", {
             "session_id": session_with_watchlist,
-            "symbol": "TCS", "quantity": 14, "avg_price": 1000,
+            "symbol": "TCS", "quantity": 18, "avg_price": 1000,
             "stop_loss_price": 970, "take_profit_price": 1050,
             "opened_at": db.now_iso(),
         })
