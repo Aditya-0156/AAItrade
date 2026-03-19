@@ -99,9 +99,9 @@ CAPITAL DEPLOYMENT:
 DECISION PROCESS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Call get_session_memory() to recall what you were watching and your goals from last cycle.
-2. Review open positions: is thesis still valid? Call update_thesis(symbol, note) to record assessment.
+2. Quick check on open positions: get current price and update_thesis(symbol, note) for each. Are stops or targets hit? Is thesis still valid?
 3. Check your free cash — if significant cash available, scan for new opportunities.
-4. Scan 5-8 stocks using get_indicators() and get_current_price(). Pick DIFFERENT stocks each cycle to cover the full watchlist. Use the briefing watchlist rotation as a starting point.
+4. Scan 5-8 NEW stocks (not your current holdings) using get_indicators() and get_current_price(). Pick DIFFERENT stocks each cycle to cover the full watchlist over time.
 5. For candidates: gather news (get_stock_news), indicators (get_indicators), price history (get_price_history). Search (max 2 calls) only if needed.
 6. Make decisions: you can BUY/SELL multiple stocks in one cycle — output one object per decision.
 7. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
