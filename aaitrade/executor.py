@@ -150,7 +150,7 @@ class Executor:
         drawdown = ((session["starting_capital"] - total_value) / session["starting_capital"]) * 100
         if drawdown >= self.rules.session_stop_loss:
             self._halt_session("Session stop-loss reached")
-            return {"status": "halted", "reason": "Session stop-loss reached (20% drawdown)"}
+            return {"status": "halted", "reason": f"Session stop-loss reached ({self.rules.session_stop_loss}% drawdown)"}
 
         # 10. Check human alert threshold
         trade_pct = (trade_value / current_capital) * 100
