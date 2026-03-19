@@ -242,9 +242,9 @@ class TestConfigRules:
         assert rules.max_deployed == 90.0
         assert rules.daily_loss_limit == 8.0
 
-    def test_session_stop_loss_always_20(self, safe_config, balanced_config, aggressive_config):
+    def test_session_stop_loss_always_40(self, safe_config, balanced_config, aggressive_config):
         for config in [safe_config, balanced_config, aggressive_config]:
-            assert config.risk_rules.session_stop_loss == 20.0
+            assert config.risk_rules.session_stop_loss == 40.0
 
     def test_profit_reinvest_ratios(self, safe_config, balanced_config, aggressive_config):
         assert safe_config.profit_reinvest_ratio == 0.0

@@ -194,10 +194,10 @@ class TestBuyValidations:
         assert result["take_profit"] == pytest.approx(1050.0, abs=1)
 
     def test_buy_session_drawdown_halts(self, in_memory_db, balanced_config, session_with_watchlist):
-        """20% drawdown → halt session."""
+        """40% drawdown → halt session."""
         ex = make_executor(balanced_config, session_with_watchlist)
-        # Simulate 20% drawdown: starting ₹20,000, current ₹16,000
-        db.update("sessions", session_with_watchlist, {"current_capital": 16000.0})
+        # Simulate 40% drawdown: starting ₹20,000, current ₹12,000
+        db.update("sessions", session_with_watchlist, {"current_capital": 12000.0})
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 100)):
             result = ex.execute(buy("RELIANCE", 1))
         assert result["status"] == "halted"
