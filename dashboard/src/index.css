@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-gray-950 text-gray-100;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  * {
+    @apply border-gray-800;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-950;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-900 border border-gray-800 rounded-xl;
+  }
+
+  .card-header {
+    @apply px-5 py-4 border-b border-gray-800 flex items-center justify-between;
+  }
+
+  .card-body {
+    @apply p-5;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  .mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  .skeleton {
+    @apply animate-pulse bg-gray-800 rounded;
+  }
+
+  .table-row-hover {
+    @apply hover:bg-gray-800/60 transition-colors;
+  }
+}
+
+@layer utilities {
+  .text-profit {
+    color: #22c55e;
+  }
+
+  .text-loss {
+    color: #ef4444;
+  }
+
+  .bg-profit\/10 {
+    background-color: rgb(34 197 94 / 0.1);
+  }
+
+  .bg-loss\/10 {
+    background-color: rgb(239 68 68 / 0.1);
+  }
+}
