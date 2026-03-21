@@ -2,7 +2,9 @@ import os
 import aiosqlite
 from typing import AsyncGenerator
 
-DB_PATH = os.environ.get("AAITRADE_DB_PATH", "/Users/aditya/AAItrade/data/aaitrade.db")
+from pathlib import Path
+_default_db = Path(__file__).resolve().parent.parent / "data" / "aaitrade.db"
+DB_PATH = os.environ.get("AAITRADE_DB_PATH", str(_default_db))
 
 
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
