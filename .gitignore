@@ -37,3 +37,4 @@ logs/
 # Local reference files (never push)
 SERVER_COMMANDS.md
 docs/3day_dry_run_simulation.html
+dashboard/node_modules/
