@@ -22,7 +22,7 @@ API_SECRET = "071tnt5srh72p63b96mh8s8btw9gogyk"  # regenerate on Zerodha dev con
 
 SERVER_USER    = "ubuntu"
 SERVER_HOST    = "68.233.98.35"
-SERVER_SSH_KEY = str(Path.home() / ".ssh/aaitrade-server.key")
+SERVER_SSH_KEY = str(Path(__file__).resolve().parent.parent / "server/ssh-key-2026-03-13.key")
 SERVER_ENV     = "~/AAItrade/.env"
 # ─────────────────────────────────────────────────────────────────────────────
 

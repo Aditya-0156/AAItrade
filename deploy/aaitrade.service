@@ -1,0 +1,21 @@
+# systemd service for AAItrade
+# Installed by deploy/setup.sh — do not edit manually on server.
+
+[Unit]
+Description=AAItrade Autonomous Trading Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AAItrade
+EnvironmentFile=/home/ubuntu/AAItrade/.env
+ExecStart=/home/ubuntu/AAItrade/.venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --log-level info
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

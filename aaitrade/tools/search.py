@@ -28,9 +28,9 @@ def set_tavily_client(client):
     name="search_web",
     description=(
         "Search the web for any information relevant to trading decisions. "
-        "Returns a clean, summarized result. Use sparingly — max 2 calls per "
-        "decision cycle. Best for specific queries like 'Trump tariff India "
-        "impact on IT sector' or 'Infosys Q3 2025 guidance details'."
+        "Returns a clean, summarized result. Best for specific queries like "
+        "'Trump tariff India impact on IT sector' or 'Infosys Q3 2025 guidance "
+        "details'. Use as many times as needed to gather information."
     ),
     parameters={
         "properties": {

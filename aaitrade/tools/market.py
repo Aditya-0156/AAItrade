@@ -408,6 +408,65 @@ def get_indicators(symbol: str) -> dict:
 
 
 @register_tool(
+    name="get_multiple_prices",
+    description=(
+        "Get current live quotes for up to 5 NSE stocks at once. More efficient "
+        "than calling get_current_price multiple times. Returns a dict with "
+        "symbol keys, each containing last_price, change_percent, etc."
+    ),
+    parameters={
+        "properties": {
+            "symbols": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of NSE symbols (e.g. ['RELIANCE', 'INFY', 'TCS']). Max 5.",
+            },
+        },
+        "required": ["symbols"],
+    },
+)
+def get_multiple_prices(symbols: list[str]) -> dict:
+    symbols = symbols[:5]  # Hard cap at 5
+    results = {}
+    if _data_source == "kite" and _kite:
+        # Batch Kite quote — single API call for all symbols
+        try:
+            instruments = [f"NSE:{s}" for s in symbols]
+            with _kite_lock:
+                quotes = _kite.quote(instruments)
+            for symbol in symbols:
+                key = f"NSE:{symbol}"
+                if key in quotes:
+                    data = quotes[key]
+                    ohlc = data.get("ohlc", {})
+                    close = ohlc.get("close", 0) or 1
+                    results[symbol] = {
+                        "symbol": symbol,
+                        "last_price": data.get("last_price"),
+                        "change_percent": round(
+                            ((data.get("last_price", 0) - close) / close) * 100, 2,
+                        ),
+                        "volume": data.get("volume"),
+                        "open": ohlc.get("open"),
+                        "high": ohlc.get("high"),
+                        "low": ohlc.get("low"),
+                        "close": ohlc.get("close"),
+                    }
+                else:
+                    results[symbol] = {"error": f"Symbol {symbol} not found", "symbol": symbol}
+        except Exception as e:
+            for symbol in symbols:
+                results[symbol] = {"error": str(e), "symbol": symbol}
+    else:
+        # Fallback: call individually for yfinance
+        for symbol in symbols:
+            results[symbol] = get_current_price(symbol)
+
+    results["timestamp"] = datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")
+    return results
+
+
+@register_tool(
     name="get_market_snapshot",
     description=(
         "Get a snapshot of the overall Indian market: Nifty 50, Bank Nifty "

@@ -28,7 +28,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are AAItrade, autonomous trading agent for India
 SESSION STATE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Mode: {trading_mode} | Free cash: ₹{current_capital:,.0f} | Secured: ₹{secured_profit:,.0f}
-Day {current_day}/{total_days} | {current_time} IST
+Day {current_day} | {current_time} IST
 
 YOUR MANDATE
 {mode_mandate}
@@ -81,11 +81,13 @@ ALWAYS log the strategy name used (e.g. "Oversold Bounce", "Breakout", "Sector R
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SCHEDULE & RHYTHM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You run 2 cycles per trading day:
+You run 4 cycles per trading day:
   Cycle 1: ~9:30 AM IST (market open — assess, plan, enter positions)
-  Cycle 2: ~12:30 PM IST (midday — review, adjust, take profits or cut losses)
-After Cycle 2, positions stay open overnight unless stop-loss/take-profit triggers at EOD.
-On the LAST day (Day {total_days}): session ends. Open positions are NOT auto-sold — they are valued at market price for your final P&L. You decide whether to exit or hold through the end.
+  Cycle 2: ~11:00 AM IST (mid-morning — review, adjust, look for setups)
+  Cycle 3: ~12:30 PM IST (midday — review, take profits or cut losses)
+  Cycle 4: ~2:00 PM IST (afternoon — final adjustments before close)
+After Cycle 4, positions stay open overnight unless stop-loss/take-profit triggers at EOD.
+This session runs endlessly — you keep trading until the user closes it from the dashboard. There is no fixed end date.
 
 CAPITAL DEPLOYMENT:
 - Your job is to grow the portfolio. Sitting in cash all session is failure — you make money by being in the market.
@@ -102,7 +104,7 @@ DECISION PROCESS
 2. Quick check on open positions: get current price and update_thesis(symbol, note) for each. Are stops or targets hit? Is thesis still valid?
 3. Check your free cash — if significant cash available, scan for new opportunities.
 4. Scan 5-8 additional stocks from your watchlist using get_indicators() and get_current_price(). Pick DIFFERENT stocks each cycle to cover the full watchlist over time.
-5. For candidates: gather news (get_stock_news), indicators (get_indicators), price history (get_price_history). Search (max 2 calls) only if needed.
+5. For candidates: gather news (get_stock_news), indicators (get_indicators), price history (get_price_history). Search if needed.
 6. Make decisions: you can BUY/SELL multiple stocks in one cycle — output one object per decision.
 7. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
 8. Call update_session_memory() with what you observed, decisions made, next-cycle goals, and which stocks to scan NEXT cycle (pick different ones). Max 2400 chars.
@@ -121,6 +123,23 @@ Multiple trades: [{{"action": "BUY", "symbol": "RELIANCE", "quantity": 5, "stop_
 Flags: "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
 
 Output JSON array only — no markdown, explanation, or text outside the array."""
+
+
+# ── Closing Mode Prompt Override ──────────────────────────────────────────────
+
+CLOSING_MODE_OVERRIDE = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠ CLOSING MODE ACTIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The user has initiated session closure. Your ONLY job now is to EXIT all open positions
+at the best possible prices. Rules:
+- NO new BUY orders. Any BUY will be rejected.
+- Review each open position and decide: SELL now or HOLD for a better exit tomorrow.
+- If a position is at a loss but the thesis suggests it will recover in 1-3 days, you may HOLD.
+- If a position is profitable or the thesis is broken, SELL it.
+- Target: exit ALL positions within 5 market days. After 10 days, remaining positions will be force-sold.
+- Be smart about exits — don't panic-sell everything at once if timing matters.
+"""
 
 
 # ── Briefing Template ──────────────────────────────────────────────────────────
@@ -147,7 +166,7 @@ class ContextBuilder:
         self.config = config
         self.session_id = session_id
 
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, closing_mode: bool = False) -> str:
         """Build the static system prompt with runtime values injected."""
         session = db.query_one(
             "SELECT current_capital, secured_profit, current_day FROM sessions WHERE id = ?",
@@ -181,14 +200,13 @@ class ContextBuilder:
             )
 
         rules = self.config.risk_rules
-        return SYSTEM_PROMPT_TEMPLATE.format(
+        prompt = SYSTEM_PROMPT_TEMPLATE.format(
             execution_mode=self.config.execution_mode.value.upper(),
             trading_mode=self.config.trading_mode.value.upper(),
             starting_capital=self.config.starting_capital,
             current_capital=session["current_capital"] if session else self.config.starting_capital,
             secured_profit=session["secured_profit"] if session else 0,
             current_day=session["current_day"] if session else 1,
-            total_days=self.config.total_days,
             current_time=datetime.now(_IST).strftime("%I:%M %p IST"),
             mode_mandate=self.config.mode_mandate,
             max_per_trade=rules.max_per_trade,
@@ -201,6 +219,12 @@ class ContextBuilder:
             watchlist_text=watchlist_text,
             watchlist_adjustment_block=watchlist_adjustment_block,
         )
+
+        # Append closing mode override if active
+        if closing_mode:
+            prompt += CLOSING_MODE_OVERRIDE
+
+        return prompt
 
     def build_briefing(self, cycle_number: int) -> str:
         """Build the per-cycle briefing with live data."""

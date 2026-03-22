@@ -174,7 +174,7 @@ class TelegramBot:
         sessions = db.query(
             "SELECT id, name, execution_mode, trading_mode, starting_capital, "
             "current_capital, secured_profit, current_day, total_days, status "
-            "FROM sessions WHERE status IN ('active', 'paused') ORDER BY id"
+            "FROM sessions WHERE status IN ('active', 'paused', 'closing') ORDER BY id"
         )
         if not sessions:
             self.send("No active sessions.")

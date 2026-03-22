@@ -239,7 +239,7 @@ class MultiSessionRunner:
                             "SELECT status, current_day, total_days FROM sessions WHERE id = ?",
                             (manager.session_id,),
                         )
-                        if not session or session["status"] != "active":
+                        if not session or session["status"] not in ("active", "closing"):
                             continue
                         if session["current_day"] > session["total_days"]:
                             manager._complete_session()

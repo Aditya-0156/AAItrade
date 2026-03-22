@@ -6,6 +6,7 @@ import { Overview } from './pages/Overview'
 import { Sessions } from './pages/Sessions'
 import { Activity } from './pages/Activity'
 import { DeepDive } from './pages/DeepDive'
+import { ControlPanel } from './pages/ControlPanel'
 import { useWebSocket } from './hooks/useWebSocket'
 
 const queryClient = new QueryClient({
@@ -22,6 +23,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/sessions': 'Sessions',
   '/activity': 'Activity',
   '/deep-dive': 'Deep Dive',
+  '/control': 'Command Center',
 }
 
 function Layout() {
@@ -40,6 +42,7 @@ function Layout() {
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/deep-dive" element={<DeepDive />} />
+            <Route path="/control" element={<ControlPanel />} />
           </Routes>
         </main>
       </div>

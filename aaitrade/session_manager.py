@@ -2,13 +2,18 @@
 
 Handles session lifecycle: start, run decision cycles on schedule,
 check stop/loss conditions, end-of-day processing, session completion.
-Integrates: holiday calendar, pause/resume, Telegram notifications.
+Integrates: holiday calendar, pause/resume, closing mode, Telegram notifications.
+
+Sessions are endless by default — they run until the user initiates closing
+mode from the dashboard. Closing mode allows only HOLD/SELL actions and
+exits positions over 1-10 market days.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +34,10 @@ from aaitrade.tools.news import get_macro_news
 
 logger = logging.getLogger(__name__)
 
+# 4 cycles per day: ~9:30, ~11:00, ~12:30, ~14:00
+# Interval = 90 minutes between cycles to cover the 9:30-15:15 window
+DEFAULT_CYCLE_INTERVAL_MINUTES = 90
+
 
 class SessionManager:
     """Manages a complete trading session."""
@@ -48,7 +57,7 @@ class SessionManager:
         logger.info(f"Starting AAItrade session")
         logger.info(f"  Mode: {self.config.execution_mode.value} + {self.config.trading_mode.value}")
         logger.info(f"  Capital: ₹{self.config.starting_capital:,.2f}")
-        logger.info(f"  Duration: {self.config.total_days} days")
+        logger.info(f"  Duration: Endless (user-controlled)")
         logger.info("=" * 60)
 
         # Initialize database
@@ -95,9 +104,6 @@ class SessionManager:
         # Load tool registry
         load_all_tools()
 
-        # Validate watchlist symbols against Kite instrument cache after init
-        # (deferred to after _init_clients so Kite cache is populated)
-
         # Disable watchlist adjustment tools if not allowed
         if not self.config.allow_watchlist_adjustment:
             disable_tool("add_to_watchlist")
@@ -125,7 +131,7 @@ class SessionManager:
                 f"ID: {self.session_id}\n"
                 f"Mode: {self.config.execution_mode.value}/{self.config.trading_mode.value}\n"
                 f"Capital: ₹{self.config.starting_capital:,.2f}\n"
-                f"Duration: {self.config.total_days} days"
+                f"Duration: Endless (close from dashboard)"
             )
 
         logger.info(f"Session {self.session_id} started successfully")
@@ -236,8 +242,22 @@ class SessionManager:
             from aaitrade.tools.news import set_anthropic_client
             set_anthropic_client(haiku_client)
 
+        # HuggingFace summarizer for large tool outputs
+        from aaitrade.summarizer import init_summarizer
+        hf_token = os.environ.get("HF_API_TOKEN", "")
+        if hf_token:
+            init_summarizer(hf_token)
+        else:
+            logger.info("HuggingFace summarizer not configured (no HF_API_TOKEN in .env)")
+
     def run(self):
-        """Run the trading session — the main loop."""
+        """Run the trading session — the main loop.
+
+        Sessions run endlessly until:
+        - User stops/halts from dashboard → status becomes 'halted'
+        - User initiates closing mode → status becomes 'closing' → exits positions → 'completed'
+        - Session stop-loss hit → 'halted'
+        """
         logger.info("Session running. Waiting for market hours...")
 
         try:
@@ -252,7 +272,7 @@ class SessionManager:
 
                 status = session["status"]
 
-                # Handle halted/completed
+                # Handle halted/completed — exit the loop
                 if status in ("halted", "completed"):
                     logger.info(f"Session is {status}.")
                     break
@@ -263,12 +283,11 @@ class SessionManager:
                     time.sleep(30)
                     continue
 
-                if session["current_day"] > session["total_days"]:
-                    logger.info("Session duration complete.")
-                    self._complete_session()
-                    break
+                # Handle closing mode — continue running but only HOLD/SELL
+                # (The closing-mode logic is in _run_cycle via the system prompt)
+                is_closing = (status == "closing")
 
-                now = datetime.now(_IST)  # Always use IST for market hours
+                now = datetime.now(_IST)
 
                 # Holiday/weekend check
                 if not is_trading_day(now.date()):
@@ -276,10 +295,28 @@ class SessionManager:
                     self._sleep_until_tomorrow()
                     continue
 
-                # Pre-market: fetch macro news at 9:00 AM IST
+                # Pre-market: fetch macro news + portfolio sync at 9:00 AM IST
                 if now.hour == 9 and now.minute < 5:
                     logger.info("Pre-market: fetching macro news...")
-                    get_macro_news()
+                    try:
+                        get_macro_news()
+                    except Exception as e:
+                        logger.error(f"Macro news fetch failed: {e}")
+
+                    # Portfolio sync for live mode
+                    if self.config.execution_mode == ExecutionMode.LIVE:
+                        try:
+                            from aaitrade.portfolio_sync import sync_portfolio_with_kite
+                            from aaitrade.tools.market import _kite
+                            if _kite:
+                                sync_result = sync_portfolio_with_kite(self.session_id, _kite)
+                                if sync_result.get("discrepancies"):
+                                    bot = get_bot()
+                                    if bot:
+                                        n = len(sync_result["discrepancies"])
+                                        bot.send(f"📊 Portfolio sync: {n} discrepancy(ies) corrected")
+                        except Exception as e:
+                            logger.error(f"Portfolio sync failed: {e}")
 
                 # Market hours: 9:15 AM to 3:30 PM IST
                 market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -292,12 +329,20 @@ class SessionManager:
 
                     if safe_open <= now <= safe_close:
                         try:
-                            self._run_cycle()
+                            # Snapshot state before cycle for recovery
+                            pre_cycle_state = self._snapshot_state()
+                            self._run_cycle(closing_mode=is_closing)
                         except Exception as e:
-                            logger.error(f"Cycle failed (will retry next interval): {e}", exc_info=True)
+                            logger.error(f"Cycle failed (restoring pre-cycle state): {e}", exc_info=True)
+                            # Restore state to before the failed cycle
+                            try:
+                                self._restore_state(pre_cycle_state)
+                                logger.info("Pre-cycle state restored successfully")
+                            except Exception as restore_err:
+                                logger.error(f"State restoration also failed: {restore_err}")
                             bot = get_bot()
                             if bot:
-                                bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}")
+                                bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}. State restored.")
 
                     # Check for end-of-day (after 3:30 PM)
                 elif now.hour == 15 and now.minute >= 30 and now.minute < 45:
@@ -306,13 +351,24 @@ class SessionManager:
                     except Exception as e:
                         logger.error(f"EOD processing failed: {e}", exc_info=True)
 
+                    # If closing mode and no positions left, complete
+                    if is_closing:
+                        positions = db.query(
+                            "SELECT COUNT(*) as cnt FROM portfolio WHERE session_id = ? AND quantity > 0",
+                            (self.session_id,),
+                        )
+                        if not positions or positions[0]["cnt"] == 0:
+                            logger.info("Closing mode: all positions exited. Completing session.")
+                            self._complete_session()
+                            break
+
                 # Wait for next interval
                 now = datetime.now(_IST)
                 market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
                 market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
 
                 if market_open <= now <= market_close:
-                    # During market hours: use configured interval
+                    # During market hours: use configured interval (default 90 min for 4 cycles/day)
                     sleep_seconds = self.config.decision_interval_minutes * 60
                     logger.info(f"Cycle done. Sleeping {self.config.decision_interval_minutes} min until next cycle...")
                 else:
@@ -325,6 +381,72 @@ class SessionManager:
             logger.info("Session interrupted by user.")
             self._complete_session()
 
+    def _snapshot_state(self) -> dict:
+        """Capture session state before a cycle for recovery purposes."""
+        session = db.query_one(
+            "SELECT current_capital, secured_profit FROM sessions WHERE id = ?",
+            (self.session_id,),
+        )
+        positions = db.query(
+            "SELECT id, symbol, quantity, avg_price, stop_loss_price, take_profit_price "
+            "FROM portfolio WHERE session_id = ?",
+            (self.session_id,),
+        )
+        return {
+            "current_capital": session["current_capital"] if session else 0,
+            "secured_profit": session["secured_profit"] if session else 0,
+            "positions": [dict(p) for p in positions],
+            "cycle_count": self.cycle_count,
+        }
+
+    def _restore_state(self, snapshot: dict):
+        """Restore session to a previous snapshot state."""
+        # Restore session capital
+        db.update("sessions", self.session_id, {
+            "current_capital": snapshot["current_capital"],
+            "secured_profit": snapshot["secured_profit"],
+        })
+
+        # Restore positions — delete any new ones, revert modified ones
+        current_positions = db.query(
+            "SELECT id, symbol FROM portfolio WHERE session_id = ?",
+            (self.session_id,),
+        )
+        snapshot_ids = {p["id"] for p in snapshot["positions"]}
+
+        # Remove positions that didn't exist in snapshot
+        for pos in current_positions:
+            if pos["id"] not in snapshot_ids:
+                with db.get_connection() as conn:
+                    conn.execute("DELETE FROM portfolio WHERE id = ?", (pos["id"],))
+
+        # Restore snapshot positions
+        for snap_pos in snapshot["positions"]:
+            existing = db.query_one(
+                "SELECT id FROM portfolio WHERE id = ?", (snap_pos["id"],)
+            )
+            if existing:
+                db.update("portfolio", snap_pos["id"], {
+                    "quantity": snap_pos["quantity"],
+                    "avg_price": snap_pos["avg_price"],
+                    "stop_loss_price": snap_pos["stop_loss_price"],
+                    "take_profit_price": snap_pos["take_profit_price"],
+                })
+            else:
+                # Position was deleted during the failed cycle — re-insert
+                db.insert("portfolio", {
+                    "session_id": self.session_id,
+                    "symbol": snap_pos["symbol"],
+                    "quantity": snap_pos["quantity"],
+                    "avg_price": snap_pos["avg_price"],
+                    "stop_loss_price": snap_pos["stop_loss_price"],
+                    "take_profit_price": snap_pos["take_profit_price"],
+                    "opened_at": db.now_iso(),
+                })
+
+        self.cycle_count = snapshot["cycle_count"]
+        logger.info("State snapshot restored")
+
     def _sleep_until_tomorrow(self):
         """Sleep until 8:55 AM IST next day."""
         now = datetime.now(_IST)
@@ -334,19 +456,19 @@ class SessionManager:
             logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours until next morning")
             time.sleep(sleep_secs)
 
-    def _run_cycle(self):
+    def _run_cycle(self, closing_mode: bool = False):
         """Run a single decision cycle."""
-        # Re-check session status (may have been paused/stopped via Telegram)
+        # Re-check session status (may have been paused/stopped via dashboard or Telegram)
         session_check = db.query_one(
             "SELECT status FROM sessions WHERE id = ?",
             (self.session_id,),
         )
-        if not session_check or session_check["status"] != "active":
+        if not session_check or session_check["status"] not in ("active", "closing"):
             return
 
         self.cycle_count += 1
         logger.info(f"{'─' * 40}")
-        logger.info(f"Decision cycle {self.cycle_count}")
+        logger.info(f"Decision cycle {self.cycle_count}" + (" [CLOSING MODE]" if closing_mode else ""))
 
         # Check stop-loss conditions before running
         session = db.query_one(
@@ -371,7 +493,7 @@ class SessionManager:
                 return
 
         # Build system prompt and briefing
-        system_prompt = self.context.build_system_prompt()
+        system_prompt = self.context.build_system_prompt(closing_mode=closing_mode)
         briefing = self.context.build_briefing(self.cycle_count)
 
         # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
@@ -387,6 +509,11 @@ class SessionManager:
         # Execute each decision in sequence
         bot = get_bot()
         for decision in decisions:
+            # In closing mode, reject BUY decisions at the executor level
+            if closing_mode and decision.get("action", "").upper() == "BUY":
+                logger.info(f"Closing mode: rejecting BUY {decision.get('symbol', '')}")
+                continue
+
             logger.info(
                 f"Decision: {decision.get('action', 'N/A')} "
                 f"{decision.get('symbol', '')} "
@@ -442,7 +569,7 @@ class SessionManager:
         if bot and summary:
             bot.send_daily_summary(summary)
 
-        # Increment day
+        # Increment day counter (for tracking purposes — sessions are endless)
         session = db.query_one(
             "SELECT current_day FROM sessions WHERE id = ?",
             (self.session_id,),

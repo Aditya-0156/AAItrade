@@ -8,7 +8,7 @@ export interface Session {
   secured_profit: number
   total_days: number
   current_day: number
-  status: 'active' | 'paused' | 'halted' | 'completed' | 'error'
+  status: 'active' | 'paused' | 'closing' | 'halted' | 'completed' | 'error'
   started_at: string
   ended_at: string | null
 }

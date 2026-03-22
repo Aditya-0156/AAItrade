@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# SSH tunnel script for AAItrade dashboard
-# Usage: ./api/tunnel.sh [user@host]
-#
-# Forwards localhost:8000 -> remote server port 8000
-# Default host can be overridden by passing user@host as first argument.
+# Open SSH tunnel: your Mac localhost:8000 -> server port 8000
+# Run this on your Mac whenever you want to use the dashboard.
+# Leave it running in a terminal tab — Ctrl+C to close.
 
 set -euo pipefail
 
-REMOTE_HOST="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -z "$REMOTE_HOST" ]]; then
-  echo "Usage: $0 user@hostname_or_ip"
-  echo ""
-  echo "Example: $0 ubuntu@192.168.1.100"
-  exit 1
+SSH_KEY="$PROJECT_DIR/server/ssh-key-2026-03-13.key"
+REMOTE="ubuntu@68.233.98.35"
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "ERROR: SSH key not found at $SSH_KEY"
+    exit 1
 fi
 
-echo "Opening SSH tunnel: localhost:8000 -> $REMOTE_HOST:8000"
+echo "Opening tunnel: localhost:8000 -> $REMOTE:8000"
+echo "Dashboard: http://localhost:5173"
 echo "Press Ctrl+C to close."
 echo ""
 
-ssh -N -L 8000:localhost:8000 "$REMOTE_HOST"
+ssh -i "$SSH_KEY" -N -L 8000:localhost:8000 "$REMOTE"

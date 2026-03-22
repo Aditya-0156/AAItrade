@@ -3,6 +3,7 @@ type Status = 'active' | 'paused' | 'halted' | 'completed' | 'error' | string
 const STATUS_STYLES: Record<string, string> = {
   active: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30',
   paused: 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30',
+  closing: 'bg-amber-500/15 text-amber-400 border border-amber-500/30',
   halted: 'bg-red-500/15 text-red-400 border border-red-500/30',
   completed: 'bg-blue-500/15 text-blue-400 border border-blue-500/30',
   error: 'bg-red-500/15 text-red-400 border border-red-500/30',
@@ -21,6 +22,9 @@ export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
     <span className={`badge ${style} ${className}`}>
       {status === 'active' && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+      )}
+      {status === 'closing' && (
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5 animate-pulse" />
       )}
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>

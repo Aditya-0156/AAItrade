@@ -39,7 +39,7 @@ function SessionCard({ session, allPositions }: { session: Session; allPositions
         <div className="text-right">
           <div className="text-xs text-gray-500 flex items-center gap-1 justify-end">
             <Calendar size={11} />
-            Day {session.current_day}/{session.total_days}
+            Day {session.current_day}{session.total_days < 99999 ? `/${session.total_days}` : ''}
           </div>
         </div>
       </div>

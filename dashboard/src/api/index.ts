@@ -70,3 +70,42 @@ export const fetchSummary = (sessionId?: number) =>
       params: sessionId ? { session_id: sessionId } : {},
     })
     .then((r) => r.data)
+
+// ── Control API (write operations) ─────────────────────────────────────
+
+export interface StartSessionParams {
+  name: string
+  execution_mode: 'paper' | 'live'
+  trading_mode: 'safe' | 'balanced' | 'aggressive'
+  starting_capital: number
+  watchlist_path?: string
+  allow_watchlist_adjustment?: boolean
+  model?: string
+}
+
+export const startSession = (params: StartSessionParams) =>
+  client.post('/api/control/sessions/start', params).then((r) => r.data)
+
+export const stopSession = (sessionId: number) =>
+  client.post(`/api/control/sessions/${sessionId}/stop`).then((r) => r.data)
+
+export const pauseSession = (sessionId: number) =>
+  client.post(`/api/control/sessions/${sessionId}/pause`).then((r) => r.data)
+
+export const resumeSession = (sessionId: number) =>
+  client.post(`/api/control/sessions/${sessionId}/resume`).then((r) => r.data)
+
+export const closeSession = (sessionId: number) =>
+  client.post(`/api/control/sessions/${sessionId}/close`).then((r) => r.data)
+
+export const syncPortfolio = (sessionId: number) =>
+  client.post(`/api/control/sessions/${sessionId}/sync`).then((r) => r.data)
+
+export const updateKiteToken = (token: string) =>
+  client.post('/api/control/token', { token }).then((r) => r.data)
+
+export const fetchPresets = () =>
+  client.get('/api/control/presets').then((r) => r.data)
+
+export const fetchRunning = () =>
+  client.get<{ running_session_ids: number[] }>('/api/control/running').then((r) => r.data)

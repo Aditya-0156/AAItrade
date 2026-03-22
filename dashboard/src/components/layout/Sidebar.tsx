@@ -4,6 +4,7 @@ import {
   BarChart3,
   Activity,
   BookOpen,
+  Settings,
   TrendingUp,
 } from 'lucide-react'
 
@@ -12,6 +13,7 @@ const navItems = [
   { to: '/sessions', label: 'Sessions', icon: BarChart3, end: false },
   { to: '/activity', label: 'Activity', icon: Activity, end: false },
   { to: '/deep-dive', label: 'Deep Dive', icon: BookOpen, end: false },
+  { to: '/control', label: 'Command Center', icon: Settings, end: false },
 ]
 
 export function Sidebar() {

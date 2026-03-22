@@ -237,7 +237,13 @@ class Executor:
         }
 
     def _live_buy(self, symbol, quantity, price, stop_loss, take_profit, decision) -> dict:
-        """Live mode: place real order via Zerodha Kite."""
+        """Live mode: place real order via Zerodha Kite.
+
+        Safety protocol:
+        1. Place the order on Kite
+        2. Wait and verify the order status
+        3. Only update DB after confirmed execution
+        """
         if not _kite:
             return {"status": "error", "reason": "Kite client not initialized for live trading"}
 
@@ -252,13 +258,31 @@ class Executor:
                 order_type=_kite.ORDER_TYPE_MARKET,
             )
 
-            # Record trade
+            # Verify order status before updating DB
+            import time
+            actual_price = price
+            for _ in range(5):
+                time.sleep(1)
+                try:
+                    order_history = _kite.order_history(order_id)
+                    if order_history:
+                        latest = order_history[-1]
+                        if latest.get("status") == "COMPLETE":
+                            actual_price = latest.get("average_price", price)
+                            break
+                        elif latest.get("status") in ("REJECTED", "CANCELLED"):
+                            logger.error(f"Live BUY REJECTED for {symbol}: {latest.get('status_message', 'Unknown')}")
+                            return {"status": "error", "reason": f"Order rejected: {latest.get('status_message', 'Unknown')}"}
+                except Exception:
+                    pass
+
+            # Order confirmed — update DB
             db.insert("trades", {
                 "session_id": self.session_id,
                 "symbol": symbol,
                 "action": "BUY",
                 "quantity": quantity,
-                "price": price,
+                "price": actual_price,
                 "stop_loss_price": stop_loss,
                 "take_profit_price": take_profit,
                 "reason": decision.get("reason", ""),
@@ -266,19 +290,44 @@ class Executor:
                 "executed_at": db.now_iso(),
             })
 
-            # Add to portfolio
-            db.insert("portfolio", {
-                "session_id": self.session_id,
-                "symbol": symbol,
-                "quantity": quantity,
-                "avg_price": price,
-                "stop_loss_price": stop_loss,
-                "take_profit_price": take_profit,
-                "opened_at": db.now_iso(),
-            })
+            # Add to portfolio (or update existing)
+            existing = db.query_one(
+                "SELECT id, quantity, avg_price FROM portfolio "
+                "WHERE session_id = ? AND symbol = ?",
+                (self.session_id, symbol),
+            )
+            if existing:
+                new_qty = existing["quantity"] + quantity
+                new_avg = ((existing["avg_price"] * existing["quantity"]) + (actual_price * quantity)) / new_qty
+                db.update("portfolio", existing["id"], {
+                    "quantity": new_qty,
+                    "avg_price": round(new_avg, 2),
+                    "stop_loss_price": stop_loss,
+                    "take_profit_price": take_profit,
+                })
+            else:
+                db.insert("portfolio", {
+                    "session_id": self.session_id,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "avg_price": actual_price,
+                    "stop_loss_price": stop_loss,
+                    "take_profit_price": take_profit,
+                    "opened_at": db.now_iso(),
+                })
 
-            logger.info(f"[LIVE] BUY {symbol} x{quantity} @ ₹{price:.2f} | Order: {order_id}")
-            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": price}
+            # Deduct from free cash
+            trade_value = actual_price * quantity
+            session_cap = db.query_one(
+                "SELECT current_capital FROM sessions WHERE id = ?", (self.session_id,)
+            )
+            if session_cap:
+                db.update("sessions", self.session_id, {
+                    "current_capital": round(session_cap["current_capital"] - trade_value, 2),
+                })
+
+            logger.info(f"[LIVE] BUY {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
+            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price}
 
         except Exception as e:
             logger.error(f"Live BUY failed for {symbol}: {e}")
@@ -387,7 +436,10 @@ class Executor:
         }
 
     def _live_sell(self, symbol, quantity, price, pnl, position, decision) -> dict:
-        """Live mode sell via Zerodha."""
+        """Live mode sell via Zerodha.
+
+        Safety protocol: verify order completion before updating DB.
+        """
         if not _kite:
             return {"status": "error", "reason": "Kite client not initialized"}
 
@@ -402,11 +454,32 @@ class Executor:
                 order_type=_kite.ORDER_TYPE_MARKET,
             )
 
-            # Record trade and update portfolio (same as paper)
-            self._simulate_sell(symbol, quantity, price, pnl, position, decision)
+            # Verify order status before updating DB
+            import time
+            actual_price = price
+            for _ in range(5):
+                time.sleep(1)
+                try:
+                    order_history = _kite.order_history(order_id)
+                    if order_history:
+                        latest = order_history[-1]
+                        if latest.get("status") == "COMPLETE":
+                            actual_price = latest.get("average_price", price)
+                            break
+                        elif latest.get("status") in ("REJECTED", "CANCELLED"):
+                            logger.error(f"Live SELL REJECTED for {symbol}: {latest.get('status_message', 'Unknown')}")
+                            return {"status": "error", "reason": f"Order rejected: {latest.get('status_message', 'Unknown')}"}
+                except Exception:
+                    pass
 
-            logger.info(f"[LIVE] SELL {symbol} x{quantity} @ ₹{price:.2f} | Order: {order_id}")
-            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": price, "pnl": round(pnl, 2)}
+            # Recalculate P&L with actual execution price
+            actual_pnl = (actual_price - position["avg_price"]) * quantity
+
+            # Record trade and update portfolio (using actual price)
+            self._simulate_sell(symbol, quantity, actual_price, actual_pnl, position, decision)
+
+            logger.info(f"[LIVE] SELL {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
+            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price, "pnl": round(actual_pnl, 2)}
 
         except Exception as e:
             logger.error(f"Live SELL failed for {symbol}: {e}")

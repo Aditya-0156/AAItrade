@@ -16,6 +16,7 @@ import anthropic
 
 from aaitrade import db
 from aaitrade.tools import call_tool, get_tools_for_api
+from aaitrade.summarizer import maybe_summarize_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +123,14 @@ class ClaudeClient:
                             "called_at": db.now_iso(),
                         })
 
+                        # Summarize large text-heavy results to save context
+                        result_json = json.dumps(result)
+                        result_json = maybe_summarize_tool_result(tool_name, result_json)
+
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": json.dumps(result),
+                            "content": result_json,
                         })
 
                 # Add assistant response and tool results to conversation

@@ -92,8 +92,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interval",
         type=int,
-        default=60,
-        help="Decision interval in minutes (default: 60)",
+        default=90,
+        help="Decision interval in minutes (default: 90 for 4 cycles/day)",
     )
     parser.add_argument(
         "--no-watchlist-adjust",

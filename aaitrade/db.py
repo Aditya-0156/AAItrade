@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     current_day     INTEGER NOT NULL DEFAULT 1,
     watchlist_path  TEXT NOT NULL,
     allow_watchlist_adjustment INTEGER NOT NULL DEFAULT 1,
-    status          TEXT NOT NULL DEFAULT 'active',   -- active / halted / completed
+    status          TEXT NOT NULL DEFAULT 'active',   -- active / paused / closing / halted / completed
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
     config_json     TEXT                    -- full SessionConfig serialized
