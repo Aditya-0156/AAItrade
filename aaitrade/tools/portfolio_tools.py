@@ -92,11 +92,13 @@ def get_cash() -> dict:
 
     available = session["current_capital"] - deployed
 
+    total_value = session["current_capital"] + deployed + session["secured_profit"]
     return {
         "starting_capital": session["starting_capital"],
         "current_capital": session["current_capital"],
         "available_cash": round(available, 2),
         "deployed_capital": round(deployed, 2),
         "secured_profit": session["secured_profit"],
-        "total_pnl": round(session["current_capital"] + session["secured_profit"] - session["starting_capital"], 2),
+        "total_portfolio_value": round(total_value, 2),
+        "total_pnl": round(total_value - session["starting_capital"], 2),
     }
