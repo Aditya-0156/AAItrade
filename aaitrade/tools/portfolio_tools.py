@@ -65,7 +65,9 @@ def get_portfolio() -> dict:
 @register_tool(
     name="get_cash",
     description=(
-        "Get available cash and secured profit breakdown for the current session."
+        "Get available cash, secured profit, and current drawdown % for the session. "
+        "drawdown_pct = (starting_capital - total_portfolio_value) / starting_capital × 100. "
+        "Use this to check your real drawdown before flagging HALT_SESSION."
     ),
     parameters={
         "properties": {},
@@ -93,6 +95,9 @@ def get_cash() -> dict:
     available = session["current_capital"] - deployed
 
     total_value = session["current_capital"] + deployed + session["secured_profit"]
+    drawdown_pct = round(
+        (session["starting_capital"] - total_value) / session["starting_capital"] * 100, 2
+    )
     return {
         "starting_capital": session["starting_capital"],
         "current_capital": session["current_capital"],
@@ -101,4 +106,5 @@ def get_cash() -> dict:
         "secured_profit": session["secured_profit"],
         "total_portfolio_value": round(total_value, 2),
         "total_pnl": round(total_value - session["starting_capital"], 2),
+        "drawdown_pct": drawdown_pct,
     }

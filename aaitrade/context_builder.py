@@ -45,7 +45,7 @@ HARD RISK RULES (enforce always)
 7. Only trade symbols on your watchlist
 8. Never trade first 15min (before 9:30 AM) or last 15min (after 3:15 PM) of market
 
-NOTE: Drawdown = (starting_capital - total_portfolio_value) / starting_capital. The system calculates this automatically. Do NOT self-calculate drawdown or self-halt — the executor enforces limits for you. Focus on finding good trades.
+NOTE: Call get_cash() to see your real drawdown_pct. Do NOT self-calculate drawdown — the number in get_cash() is authoritative. The executor enforces the halt limit automatically.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 YOUR WATCHLIST
