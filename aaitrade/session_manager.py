@@ -267,6 +267,78 @@ class SessionManager:
         else:
             logger.info("HuggingFace summarizer not configured (no HF_API_TOKEN in .env)")
 
+    # Fixed cycle slots: (hour, minute) in IST
+    CYCLE_SLOTS = [(9, 30), (11, 0), (12, 30), (14, 0)]
+    CYCLE_WINDOW_MINUTES = 89  # A slot is valid to run up to 89 min after its start time
+    CYCLE_DURATION_MINUTES = 5  # Max time a cycle takes — don't start if next slot is within this
+
+    def _get_due_slot(self, now: datetime) -> tuple[int, int] | None:
+        """Return the slot (hour, min) that is due to run right now, or None.
+
+        A slot is due if:
+        - Its scheduled time has passed today
+        - It hasn't run yet today (last cycle ran before this slot's time)
+        - We're still within its 89-min window (before the next slot starts)
+        - The next slot isn't starting within CYCLE_DURATION_MINUTES
+        """
+        today = now.date()
+        interval = self.config.decision_interval_minutes  # default 90
+
+        # Get last cycle run time from DB (stored as ISO string in decisions table)
+        last_run = db.query_one(
+            "SELECT MAX(decided_at) as last FROM decisions WHERE session_id = ?",
+            (self.session_id,),
+        )
+        last_run_dt = None
+        if last_run and last_run["last"]:
+            try:
+                last_run_dt = datetime.fromisoformat(last_run["last"]).astimezone(_IST)
+            except Exception:
+                pass
+
+        for i, (h, m) in enumerate(self.CYCLE_SLOTS):
+            slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+            # Slot hasn't started yet today
+            if now < slot_time:
+                continue
+
+            # Already past this slot's window (next slot already started)
+            window_end = slot_time + timedelta(minutes=self.CYCLE_WINDOW_MINUTES)
+            if now > window_end:
+                continue
+
+            # Check if next slot is starting very soon — don't start a cycle that would overlap
+            if i + 1 < len(self.CYCLE_SLOTS):
+                next_h, next_m = self.CYCLE_SLOTS[i + 1]
+                next_slot = now.replace(hour=next_h, minute=next_m, second=0, microsecond=0)
+                if (next_slot - now).total_seconds() < self.CYCLE_DURATION_MINUTES * 60:
+                    continue
+
+            # Already ran during this slot today?
+            if last_run_dt and last_run_dt.date() == today and last_run_dt >= slot_time:
+                continue
+
+            return (h, m)
+
+        return None
+
+    def _seconds_until_next_slot(self, now: datetime) -> int:
+        """Return seconds to sleep until the next cycle slot or market open."""
+        today = now.date()
+
+        # Find next slot today
+        for h, m in self.CYCLE_SLOTS:
+            slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if slot_time > now:
+                secs = int((slot_time - now).total_seconds())
+                logger.info(f"Sleeping {secs // 60}m {secs % 60}s until next cycle slot ({h:02d}:{m:02d} IST)...")
+                return max(secs, 1)
+
+        # All slots done today — sleep until tomorrow 9:00 AM
+        logger.info("All cycles done for today. Sleeping until tomorrow 9:00 AM IST...")
+        return self._sleep_until_tomorrow(dry_run=True)
+
     def run(self):
         """Run the trading session — the main loop.
 
@@ -274,6 +346,12 @@ class SessionManager:
         - User stops/halts from dashboard → status becomes 'halted'
         - User initiates closing mode → status becomes 'closing' → exits positions → 'completed'
         - Session stop-loss hit → 'halted'
+
+        Cycle scheduling:
+        - Fixed slots: 9:30, 11:00, 12:30, 14:00 IST
+        - Each slot has a 89-min window to run (covers the full gap between slots)
+        - On restart: checks which slot is currently due and runs it if it hasn't run yet today
+        - Tracks last cycle time via decisions table — survives restarts
         """
         logger.info("Session running. Waiting for market hours...")
 
@@ -300,10 +378,7 @@ class SessionManager:
                     time.sleep(30)
                     continue
 
-                # Handle closing mode — continue running but only HOLD/SELL
-                # (The closing-mode logic is in _run_cycle via the system prompt)
                 is_closing = (status == "closing")
-
                 now = datetime.now(_IST)
 
                 # Holiday/weekend check
@@ -312,7 +387,7 @@ class SessionManager:
                     self._sleep_until_tomorrow()
                     continue
 
-                # Pre-market: fetch macro news + portfolio sync at 9:00 AM IST
+                # Pre-market: fetch macro news + portfolio sync at 9:00-9:05 AM IST
                 if now.hour == 9 and now.minute < 5:
                     logger.info("Pre-market: fetching macro news...")
                     try:
@@ -320,7 +395,6 @@ class SessionManager:
                     except Exception as e:
                         logger.error(f"Macro news fetch failed: {e}")
 
-                    # Portfolio sync for live mode
                     if self.config.execution_mode == ExecutionMode.LIVE:
                         try:
                             from aaitrade.portfolio_sync import sync_portfolio_with_kite
@@ -335,40 +409,15 @@ class SessionManager:
                         except Exception as e:
                             logger.error(f"Portfolio sync failed: {e}")
 
-                # Market hours: 9:15 AM to 3:30 PM IST
-                market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-                market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-
-                if market_open <= now <= market_close:
-                    # Trading window (skip first and last 15 mins as per rules)
-                    safe_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-                    safe_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
-
-                    if safe_open <= now <= safe_close:
-                        try:
-                            # Snapshot state before cycle for recovery
-                            pre_cycle_state = self._snapshot_state()
-                            self._run_cycle(closing_mode=is_closing)
-                        except Exception as e:
-                            logger.error(f"Cycle failed (restoring pre-cycle state): {e}", exc_info=True)
-                            # Restore state to before the failed cycle
-                            try:
-                                self._restore_state(pre_cycle_state)
-                                logger.info("Pre-cycle state restored successfully")
-                            except Exception as restore_err:
-                                logger.error(f"State restoration also failed: {restore_err}")
-                            bot = get_bot()
-                            if bot:
-                                bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}. State restored.")
-
-                    # Check for end-of-day (after 3:30 PM)
-                elif now.hour == 15 and now.minute >= 30 and now.minute < 45:
+                # End-of-day: after 3:30 PM
+                eod_start = now.replace(hour=15, minute=30, second=0, microsecond=0)
+                eod_end   = now.replace(hour=15, minute=45, second=0, microsecond=0)
+                if eod_start <= now <= eod_end:
                     try:
                         self._end_of_day()
                     except Exception as e:
                         logger.error(f"EOD processing failed: {e}", exc_info=True)
 
-                    # If closing mode and no positions left, complete
                     if is_closing:
                         positions = db.query(
                             "SELECT COUNT(*) as cnt FROM portfolio WHERE session_id = ? AND quantity > 0",
@@ -379,19 +428,28 @@ class SessionManager:
                             self._complete_session()
                             break
 
-                # Wait for next interval
-                now = datetime.now(_IST)
-                market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-                market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+                # Check if a cycle slot is due right now
+                due_slot = self._get_due_slot(now)
+                if due_slot:
+                    h, m = due_slot
+                    logger.info(f"Running cycle for slot {h:02d}:{m:02d} IST")
+                    try:
+                        pre_cycle_state = self._snapshot_state()
+                        self._run_cycle(closing_mode=is_closing)
+                    except Exception as e:
+                        logger.error(f"Cycle failed (restoring pre-cycle state): {e}", exc_info=True)
+                        try:
+                            self._restore_state(pre_cycle_state)
+                            logger.info("Pre-cycle state restored successfully")
+                        except Exception as restore_err:
+                            logger.error(f"State restoration also failed: {restore_err}")
+                        bot = get_bot()
+                        if bot:
+                            bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}. State restored.")
 
-                if market_open <= now <= market_close:
-                    # During market hours: use configured interval (default 90 min for 4 cycles/day)
-                    sleep_seconds = self.config.decision_interval_minutes * 60
-                    logger.info(f"Cycle done. Sleeping {self.config.decision_interval_minutes} min until next cycle...")
-                else:
-                    # Outside market hours: check every 60 seconds so we don't miss market open
-                    sleep_seconds = 60
-                    logger.debug("Outside market hours, checking again in 60s...")
+                # Sleep until next slot (or tomorrow if all slots done)
+                now = datetime.now(_IST)
+                sleep_seconds = self._seconds_until_next_slot(now)
                 time.sleep(sleep_seconds)
 
         except KeyboardInterrupt:
@@ -464,14 +522,15 @@ class SessionManager:
         self.cycle_count = snapshot["cycle_count"]
         logger.info("State snapshot restored")
 
-    def _sleep_until_tomorrow(self):
-        """Sleep until 8:55 AM IST next day."""
+    def _sleep_until_tomorrow(self, dry_run: bool = False) -> int:
+        """Sleep until 8:55 AM IST next day. Returns seconds to sleep."""
         now = datetime.now(_IST)
         tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
-        sleep_secs = (tomorrow_morning - now).total_seconds()
-        if sleep_secs > 0:
+        sleep_secs = int((tomorrow_morning - now).total_seconds())
+        if sleep_secs > 0 and not dry_run:
             logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours until next morning")
             time.sleep(sleep_secs)
+        return max(sleep_secs, 1)
 
     def _run_cycle(self, closing_mode: bool = False):
         """Run a single decision cycle."""
