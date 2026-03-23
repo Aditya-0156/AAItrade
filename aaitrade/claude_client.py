@@ -32,7 +32,7 @@ class ClaudeClient:
         self,
         api_key: str,
         model: str = "claude-haiku-4-5-20251001",  # Default to Haiku for cost (~73% cheaper)
-        max_tool_rounds: int = 8,
+        max_tool_rounds: int = 30,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
         self.model = model  # Can be overridden per-session via config

@@ -155,7 +155,7 @@ class SessionConfig:
     watchlist_path: str | Path
     allow_watchlist_adjustment: bool = True
     decision_interval_minutes: int = 90  # 4 cycles/day: ~9:30, ~11:00, ~12:30, ~14:00
-    max_tool_calls_per_cycle: int = 40
+    max_tool_calls_per_cycle: int = 30
     max_web_searches_per_cycle: int = 5   # No hard limit in prompt — Claude decides
     model: str = "claude-haiku-4-5-20251001"  # Default Haiku for cost (~73% cheaper); override per-session if needed
     profit_reinvest_ratio: float = 0.5  # 0.0=secure all profit, 1.0=reinvest all profit
