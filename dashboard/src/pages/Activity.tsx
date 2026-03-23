@@ -159,7 +159,6 @@ type FeedItemType = 'all' | 'decisions' | 'tool_calls' | 'BUY' | 'SELL' | 'HOLD'
 export function Activity() {
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
   const [typeFilter, setTypeFilter] = useState<FeedItemType>('all')
-  const feedItems = useAppStore((s) => s.feedItems)
 
   const { data: sessions = [] } = useQuery({
     queryKey: ['sessions'],
