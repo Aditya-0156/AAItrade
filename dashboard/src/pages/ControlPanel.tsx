@@ -232,9 +232,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Stop Loss %"
               description="Exit position automatically if it falls by this percentage. Lower = safer but more frequent stops."
               value={form.custom_stop_loss ?? 3.0}
-              min={0.5}
-              max={15}
-              step={0.5}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_stop_loss: v })}
             />
@@ -242,9 +239,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Take Profit %"
               description="Lock in gains when position rises by this percentage. Lower = more frequent smaller wins."
               value={form.custom_take_profit ?? 5.0}
-              min={1}
-              max={30}
-              step={0.5}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_take_profit: v })}
             />
@@ -252,9 +246,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Max Open Positions"
               description="Maximum number of stocks held simultaneously. More = diversified but harder to monitor."
               value={form.custom_max_positions ?? 5}
-              min={1}
-              max={10}
-              step={1}
               unit="int"
               onChange={(v) => setForm({ ...form, custom_max_positions: v })}
             />
@@ -262,9 +253,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Max Per Trade %"
               description="Maximum % of capital that can be committed to a single trade. Limits concentration risk."
               value={form.custom_max_per_trade ?? 20.0}
-              min={5}
-              max={50}
-              step={1}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_max_per_trade: v })}
             />
@@ -272,9 +260,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Max Deployed %"
               description="Maximum % of total capital that can be in open positions at once. Keeps cash buffer."
               value={form.custom_max_deployed ?? 90.0}
-              min={30}
-              max={100}
-              step={5}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_max_deployed: v })}
             />
@@ -282,9 +267,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               label="Daily Loss Limit %"
               description="Halt all trading for the day if total losses reach this % of capital. Hard circuit breaker."
               value={form.custom_daily_loss_limit ?? 5.0}
-              min={1}
-              max={20}
-              step={0.5}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_daily_loss_limit: v })}
             />
