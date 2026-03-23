@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench } from 'lucide-react'
 import { fetchSessions, fetchDecisions, fetchToolCalls } from '../api'
+import { useAppStore } from '../store'
 import type { Session, Decision, ToolCall } from '../types'
 
 function toIST(str: string) {
@@ -159,23 +160,28 @@ type FeedItemType = 'all' | 'decisions' | 'tool_calls' | 'BUY' | 'SELL' | 'HOLD'
 export function Activity() {
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
   const [typeFilter, setTypeFilter] = useState<FeedItemType>('all')
+  const feedItems = useAppStore((s) => s.feedItems)
+  const isLoading = false
 
   const { data: sessions = [] } = useQuery({
     queryKey: ['sessions'],
     queryFn: fetchSessions,
   })
 
-  const { data: decisions = [], isLoading: loadingDecisions } = useQuery({
-    queryKey: ['decisions', selectedSessionId],
-    queryFn: () => fetchDecisions(selectedSessionId ?? undefined, 200),
-    refetchInterval: 30_000,
-  })
+  // Get decisions and tool calls from WebSocket feed store
+  const decisions = useMemo(() => {
+    return feedItems
+      .filter((item) => item.type === 'decision')
+      .map((item) => item as any as Decision)
+      .filter((d) => !selectedSessionId || d.session_id === selectedSessionId)
+  }, [feedItems, selectedSessionId])
 
-  const { data: toolCalls = [], isLoading: loadingToolCalls } = useQuery({
-    queryKey: ['tool_calls', selectedSessionId],
-    queryFn: () => fetchToolCalls(selectedSessionId ?? undefined, 500),
-    refetchInterval: 30_000,
-  })
+  const toolCalls = useMemo(() => {
+    return feedItems
+      .filter((item) => item.type === 'tool_call')
+      .map((item) => item as any as ToolCall)
+      .filter((tc) => !selectedSessionId || tc.session_id === selectedSessionId)
+  }, [feedItems, selectedSessionId])
 
   type FeedItem =
     | { kind: 'decision'; ts: string; data: Decision }
@@ -202,7 +208,6 @@ export function Activity() {
     })
   }, [mergedFeed, typeFilter])
 
-  const isLoading = loadingDecisions || loadingToolCalls
 
   return (
     <div className="p-6 space-y-4">
