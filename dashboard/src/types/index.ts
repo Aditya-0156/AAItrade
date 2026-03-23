@@ -2,7 +2,7 @@ export interface Session {
   id: number
   name: string
   execution_mode: 'paper' | 'live'
-  trading_mode: 'safe' | 'balanced' | 'aggressive'
+  trading_mode: 'safe' | 'balanced' | 'aggressive' | 'custom'
   starting_capital: number
   current_capital: number
   secured_profit: number
@@ -11,6 +11,7 @@ export interface Session {
   status: 'active' | 'paused' | 'closing' | 'halted' | 'completed' | 'error'
   started_at: string
   ended_at: string | null
+  profit_reinvest_ratio: number
 }
 
 export interface Trade {

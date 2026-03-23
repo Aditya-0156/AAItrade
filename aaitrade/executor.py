@@ -351,6 +351,22 @@ class Executor:
 
         quantity = decision.get("quantity") or position["quantity"]  # default: sell all
 
+        # Warn if multiple live sessions hold the same symbol (Zerodha collision risk)
+        if self.config.execution_mode == ExecutionMode.LIVE:
+            other_live = db.query(
+                "SELECT s.id FROM portfolio p "
+                "JOIN sessions s ON s.id = p.session_id "
+                "WHERE p.symbol = ? AND p.session_id != ? AND s.execution_mode = 'live' AND s.status IN ('active', 'closing')",
+                (symbol, self.session_id),
+            )
+            if other_live:
+                other_ids = [str(r["id"]) for r in other_live]
+                logger.warning(
+                    f"[COLLISION WARNING] Multiple live sessions hold {symbol}: "
+                    f"this session ({self.session_id}) and sessions {', '.join(other_ids)}. "
+                    f"Zerodha will sell from the combined position — DB will only update this session."
+                )
+
         # Get current price
         from aaitrade.tools.market import get_current_price
         price_data = get_current_price(symbol)
@@ -391,13 +407,13 @@ class Executor:
 
         # Handle profit/loss — current_capital is free cash (cost_basis was deducted at BUY)
         # Return cost_basis to free cash, then split any profit per mode
-        session = db.query_one("SELECT id, current_capital, secured_profit FROM sessions WHERE id = ?", (self.session_id,))
+        session = db.query_one("SELECT id, current_capital, secured_profit, profit_reinvest_ratio FROM sessions WHERE id = ?", (self.session_id,))
         if session:
             cost_basis = position["avg_price"] * quantity
             new_secured = session["secured_profit"]
 
             if pnl > 0:
-                reinvest_ratio = self.config.profit_reinvest_ratio
+                reinvest_ratio = session.get("profit_reinvest_ratio", 0.5) if session else 0.5
                 secure = pnl * (1 - reinvest_ratio)
                 # Return cost_basis + reinvested portion of profit to free cash
                 new_capital = session["current_capital"] + cost_basis + (pnl * reinvest_ratio)

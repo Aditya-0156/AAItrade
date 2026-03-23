@@ -62,6 +62,7 @@ def safe_config():
         total_days=10,
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
+        profit_reinvest_ratio=0.0,  # safe: secure all profit
     )
 
 
@@ -74,6 +75,7 @@ def balanced_config():
         total_days=10,
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
+        profit_reinvest_ratio=0.5,  # balanced: 50/50
     )
 
 
@@ -86,6 +88,7 @@ def aggressive_config():
         total_days=10,
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
+        profit_reinvest_ratio=1.0,  # aggressive: reinvest all
     )
 
 
@@ -119,6 +122,7 @@ def session_id(in_memory_db, balanced_config):
         "current_day": 1,
         "watchlist_path": str(balanced_config.watchlist_path),
         "allow_watchlist_adjustment": 1,
+        "profit_reinvest_ratio": balanced_config.profit_reinvest_ratio,
         "status": "active",
         "started_at": db.now_iso(),
         "config_json": "{}",

@@ -76,11 +76,19 @@ export const fetchSummary = (sessionId?: number) =>
 export interface StartSessionParams {
   name: string
   execution_mode: 'paper' | 'live'
-  trading_mode: 'safe' | 'balanced' | 'aggressive'
+  trading_mode: 'safe' | 'balanced' | 'aggressive' | 'custom'
   starting_capital: number
   watchlist_path?: string
   allow_watchlist_adjustment?: boolean
   model?: string
+  profit_reinvest_ratio?: number
+  // Custom mode fields:
+  custom_stop_loss?: number
+  custom_take_profit?: number
+  custom_max_positions?: number
+  custom_max_per_trade?: number
+  custom_max_deployed?: number
+  custom_daily_loss_limit?: number
 }
 
 export const startSession = (params: StartSessionParams) =>
@@ -109,3 +117,8 @@ export const fetchPresets = () =>
 
 export const fetchRunning = () =>
   client.get<{ running_session_ids: number[] }>('/api/control/running').then((r) => r.data)
+
+export async function updateReinvestRatio(sessionId: number, ratio: number) {
+  const { data } = await client.post(`/api/control/sessions/${sessionId}/reinvest`, { ratio })
+  return data
+}

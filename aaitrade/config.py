@@ -158,16 +158,15 @@ class SessionConfig:
     max_tool_calls_per_cycle: int = 40
     max_web_searches_per_cycle: int = 5   # No hard limit in prompt — Claude decides
     model: str = "claude-haiku-4-5-20251001"  # Default Haiku for cost (~73% cheaper); override per-session if needed
+    profit_reinvest_ratio: float = 0.5  # 0.0=secure all profit, 1.0=reinvest all profit
 
     # Derived
     risk_rules: RiskRules = field(init=False)
     mode_mandate: str = field(init=False)
-    profit_reinvest_ratio: float = field(init=False)
 
     def __post_init__(self):
         self.risk_rules = RISK_PROFILES[self.trading_mode]
         self.mode_mandate = MODE_MANDATES[self.trading_mode]
-        self.profit_reinvest_ratio = PROFIT_REINVEST_RATIO[self.trading_mode]
 
 
 # ── API Keys ───────────────────────────────────────────────────────────────────

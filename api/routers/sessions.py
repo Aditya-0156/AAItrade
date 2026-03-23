@@ -12,7 +12,7 @@ async def list_sessions(db: aiosqlite.Connection = Depends(get_db)):
         """
         SELECT id, name, execution_mode, trading_mode, starting_capital,
                current_capital, secured_profit, total_days, current_day,
-               status, started_at, ended_at
+               profit_reinvest_ratio, status, started_at, ended_at
         FROM sessions
         ORDER BY started_at DESC
         """,
@@ -27,7 +27,7 @@ async def get_session(session_id: int, db: aiosqlite.Connection = Depends(get_db
         """
         SELECT id, name, execution_mode, trading_mode, starting_capital,
                current_capital, secured_profit, total_days, current_day,
-               status, started_at, ended_at
+               profit_reinvest_ratio, status, started_at, ended_at
         FROM sessions WHERE id = ?
         """,
         (session_id,),

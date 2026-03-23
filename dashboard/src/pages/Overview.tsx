@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUp, TrendingDown, Layers, Calendar, DollarSign } from 'lucide-react'
+import { TrendingUp, TrendingDown, Layers, Calendar, DollarSign, Radio, FlaskConical } from 'lucide-react'
 import { fetchSessions, fetchPortfolio } from '../api'
 import { StatusBadge, ModeBadge } from '../components/shared/StatusBadge'
 import { PnLPercent } from '../components/shared/PnLBadge'
@@ -120,7 +120,19 @@ function SkeletonCard() {
   )
 }
 
-function CombinedStats({ sessions, positions }: { sessions: Session[]; positions: PortfolioPosition[] }) {
+function CombinedStats({
+  sessions,
+  positions,
+  label,
+  labelColor,
+  icon,
+}: {
+  sessions: Session[]
+  positions: PortfolioPosition[]
+  label: string
+  labelColor: string
+  icon: React.ReactNode
+}) {
   const totalStarting = sessions.reduce((s, x) => s + x.starting_capital, 0)
   const totalDeployed = sessions.reduce((s, x) => s + calcDeployed(positions, x.id), 0)
   const totalCash = sessions.reduce((s, x) => s + x.current_capital, 0)
@@ -132,7 +144,10 @@ function CombinedStats({ sessions, positions }: { sessions: Session[]; positions
   return (
     <div className="card">
       <div className="card-header">
-        <span className="text-sm font-semibold text-gray-300">Combined Portfolio</span>
+        <span className={`text-sm font-semibold flex items-center gap-2 ${labelColor}`}>
+          {icon}
+          {label}
+        </span>
         <span className="text-xs text-gray-500">{sessions.length} sessions · {activeSessions} active</span>
       </div>
       <div className="card-body flex flex-wrap gap-8">
@@ -162,6 +177,40 @@ function CombinedStats({ sessions, positions }: { sessions: Session[]; positions
   )
 }
 
+function SessionGroup({
+  title,
+  sessions,
+  allPositions,
+  isLoading,
+}: {
+  title: string
+  sessions: Session[]
+  allPositions: PortfolioPosition[]
+  isLoading: boolean
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <TrendingUp size={15} className="text-gray-500" />
+        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">{title}</h2>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {isLoading ? (
+          [1, 2, 3].map((i) => <SkeletonCard key={i} />)
+        ) : sessions.length > 0 ? (
+          sessions.map((session) => (
+            <SessionCard key={session.id} session={session} allPositions={allPositions} />
+          ))
+        ) : (
+          <div className="col-span-3 py-10 text-center text-gray-600 text-sm">
+            No {title.toLowerCase()} sessions found.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function Overview() {
   const { data: sessions, isLoading: loadingSessions, isError: errorSessions } = useQuery({
     queryKey: ['sessions'],
@@ -186,34 +235,72 @@ export function Overview() {
     )
   }
 
+  const liveSessions = sessions?.filter((s) => s.execution_mode === 'live') ?? []
+  const paperSessions = sessions?.filter((s) => s.execution_mode === 'paper') ?? []
+
   return (
     <div className="p-6 space-y-6">
-      {/* Combined stats */}
-      {!isLoading && sessions && sessions.length > 0 && (
-        <CombinedStats sessions={sessions} positions={allPositions} />
+      {/* Live combined stats */}
+      {!isLoading && liveSessions.length > 0 && (
+        <CombinedStats
+          sessions={liveSessions}
+          positions={allPositions}
+          label="Live Trading"
+          labelColor="text-green-400"
+          icon={<Radio size={14} />}
+        />
       )}
 
-      {/* Session cards grid */}
-      <div>
-        <div className="flex items-center gap-2 mb-4">
-          <TrendingUp size={15} className="text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Sessions</h2>
-        </div>
+      {/* Paper combined stats */}
+      {!isLoading && paperSessions.length > 0 && (
+        <CombinedStats
+          sessions={paperSessions}
+          positions={allPositions}
+          label="Paper Trading"
+          labelColor="text-gray-400"
+          icon={<FlaskConical size={14} />}
+        />
+      )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {isLoading ? (
-            [1, 2, 3].map((i) => <SkeletonCard key={i} />)
-          ) : sessions && sessions.length > 0 ? (
-            sessions.map((session) => (
-              <SessionCard key={session.id} session={session} allPositions={allPositions} />
-            ))
-          ) : (
-            <div className="col-span-3 py-16 text-center text-gray-600 text-sm">
-              No sessions found. Start a trading session to see data here.
-            </div>
-          )}
+      {/* Live sessions grid */}
+      {!isLoading && liveSessions.length > 0 && (
+        <SessionGroup
+          title="Live Sessions"
+          sessions={liveSessions}
+          allPositions={allPositions}
+          isLoading={isLoading}
+        />
+      )}
+
+      {/* Paper sessions grid */}
+      {!isLoading && paperSessions.length > 0 && (
+        <SessionGroup
+          title="Paper Sessions"
+          sessions={paperSessions}
+          allPositions={allPositions}
+          isLoading={isLoading}
+        />
+      )}
+
+      {/* Loading skeleton */}
+      {isLoading && (
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp size={15} className="text-gray-500" />
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Sessions</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && (!sessions || sessions.length === 0) && (
+        <div className="py-16 text-center text-gray-600 text-sm">
+          No sessions found. Start a trading session to see data here.
+        </div>
+      )}
     </div>
   )
 }

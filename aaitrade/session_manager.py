@@ -75,6 +75,7 @@ class SessionManager:
             "current_day": 1,
             "watchlist_path": str(self.config.watchlist_path),
             "allow_watchlist_adjustment": int(self.config.allow_watchlist_adjustment),
+            "profit_reinvest_ratio": self.config.profit_reinvest_ratio,
             "status": "active",
             "started_at": db.now_iso(),
             "config_json": json.dumps({

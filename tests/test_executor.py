@@ -324,8 +324,8 @@ class TestProfitReinvestment:
             "name": "safe-test", "execution_mode": "paper", "trading_mode": "safe",
             "starting_capital": 10000, "current_capital": 10000, "secured_profit": 0,
             "total_days": 10, "current_day": 1, "watchlist_path": "x",
-            "allow_watchlist_adjustment": 1, "status": "active",
-            "started_at": db.now_iso(), "config_json": "{}",
+            "allow_watchlist_adjustment": 1, "profit_reinvest_ratio": 0.0,
+            "status": "active", "started_at": db.now_iso(), "config_json": "{}",
         })
         db.insert("watchlist", {
             "session_id": sid, "symbol": "RELIANCE", "company": "Reliance",
@@ -352,8 +352,8 @@ class TestProfitReinvestment:
             "name": "agg", "execution_mode": "paper", "trading_mode": "aggressive",
             "starting_capital": 20000, "current_capital": 20000, "secured_profit": 0,
             "total_days": 10, "current_day": 1, "watchlist_path": "x",
-            "allow_watchlist_adjustment": 1, "status": "active",
-            "started_at": db.now_iso(), "config_json": "{}",
+            "allow_watchlist_adjustment": 1, "profit_reinvest_ratio": 1.0,
+            "status": "active", "started_at": db.now_iso(), "config_json": "{}",
         })
         db.insert("watchlist", {
             "session_id": sid, "symbol": "RELIANCE", "company": "Reliance",

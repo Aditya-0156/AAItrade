@@ -22,6 +22,8 @@ from aaitrade import db
 from aaitrade.config import (
     APIKeys,
     ExecutionMode,
+    RiskRules,
+    RISK_PROFILES,
     SessionConfig,
     TradingMode,
     load_watchlist,
@@ -86,6 +88,14 @@ class TradingServer:
         watchlist_path: str = "config/watchlist_seed.yaml",
         allow_watchlist_adjustment: bool = True,
         model: str = "claude-haiku-4-5-20251001",
+        profit_reinvest_ratio: float | None = None,
+        # Custom risk params (only used when trading_mode == "custom"):
+        custom_stop_loss: float | None = None,
+        custom_take_profit: float | None = None,
+        custom_max_positions: int | None = None,
+        custom_max_per_trade: float | None = None,
+        custom_max_deployed: float | None = None,
+        custom_daily_loss_limit: float | None = None,
     ) -> dict:
         """Start a new trading session in a background thread.
 
@@ -93,10 +103,13 @@ class TradingServer:
         """
         self._ensure_initialized()
 
+        # For custom mode, use balanced as base config then override risk_rules
+        config_trading_mode = trading_mode if trading_mode != "custom" else "balanced"
+
         # Build config — total_days=99999 for endless sessions
         config = SessionConfig(
             execution_mode=ExecutionMode(execution_mode),
-            trading_mode=TradingMode(trading_mode),
+            trading_mode=TradingMode(config_trading_mode),
             starting_capital=starting_capital,
             total_days=99999,  # Endless — user closes via dashboard
             watchlist_path=Path(watchlist_path),
@@ -104,10 +117,33 @@ class TradingServer:
             model=model,
         )
 
+        # Override risk_rules for custom mode
+        if trading_mode == "custom":
+            base_rules = RISK_PROFILES[TradingMode.BALANCED]
+            custom_rules = RiskRules(
+                stop_loss=custom_stop_loss if custom_stop_loss is not None else base_rules.stop_loss,
+                take_profit=custom_take_profit if custom_take_profit is not None else base_rules.take_profit,
+                max_positions=custom_max_positions if custom_max_positions is not None else base_rules.max_positions,
+                max_per_trade=custom_max_per_trade if custom_max_per_trade is not None else base_rules.max_per_trade,
+                max_deployed=custom_max_deployed if custom_max_deployed is not None else base_rules.max_deployed,
+                daily_loss_limit=custom_daily_loss_limit if custom_daily_loss_limit is not None else base_rules.daily_loss_limit,
+                session_stop_loss=base_rules.session_stop_loss,
+                human_alert_threshold=base_rules.human_alert_threshold,
+            )
+            config.risk_rules = custom_rules
+
+        # Set profit_reinvest_ratio if provided
+        if profit_reinvest_ratio is not None:
+            config.profit_reinvest_ratio = profit_reinvest_ratio
+
         manager = SessionManager(config, self._keys, name=name)
         manager.start()
 
         session_id = manager.session_id
+
+        # Ensure the DB record reflects the actual trading_mode label (including "custom")
+        if trading_mode == "custom":
+            db.update("sessions", session_id, {"trading_mode": "custom"})
 
         # Run in background thread
         thread = threading.Thread(
@@ -135,6 +171,7 @@ class TradingServer:
             "execution_mode": execution_mode,
             "trading_mode": trading_mode,
             "starting_capital": starting_capital,
+            "profit_reinvest_ratio": config.profit_reinvest_ratio,
         }
 
     def _run_session_safe(self, manager: SessionManager):
@@ -247,13 +284,21 @@ class TradingServer:
         if not session:
             return
 
+        # For custom mode stored in DB, use balanced as the base
+        db_trading_mode = session["trading_mode"]
+        config_trading_mode = db_trading_mode if db_trading_mode != "custom" else "balanced"
+
         config = SessionConfig(
             execution_mode=ExecutionMode(session["execution_mode"]),
-            trading_mode=TradingMode(session["trading_mode"]),
+            trading_mode=TradingMode(config_trading_mode),
             starting_capital=session["starting_capital"],
             total_days=99999,
             watchlist_path=Path(session["watchlist_path"]),
         )
+
+        # Restore profit_reinvest_ratio from DB
+        if "profit_reinvest_ratio" in session and session["profit_reinvest_ratio"] is not None:
+            config.profit_reinvest_ratio = session["profit_reinvest_ratio"]
 
         manager = SessionManager(config, self._keys, name=session["name"])
         manager.session_id = session_id

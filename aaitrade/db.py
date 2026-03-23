@@ -48,6 +48,13 @@ def init_db():
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
 
+    # Migrations for existing DBs
+    try:
+        with get_connection() as conn:
+            conn.execute("ALTER TABLE sessions ADD COLUMN profit_reinvest_ratio REAL NOT NULL DEFAULT 0.5")
+    except Exception:
+        pass  # Column already exists
+
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
@@ -64,6 +71,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     current_day     INTEGER NOT NULL DEFAULT 1,
     watchlist_path  TEXT NOT NULL,
     allow_watchlist_adjustment INTEGER NOT NULL DEFAULT 1,
+    profit_reinvest_ratio REAL NOT NULL DEFAULT 0.5,  -- 0.0=secure all, 0.5=split, 1.0=reinvest all
     status          TEXT NOT NULL DEFAULT 'active',   -- active / paused / closing / halted / completed
     started_at      TEXT NOT NULL,
     ended_at        TEXT,

@@ -7,6 +7,7 @@ update the Kite token, and manage settings without SSH access.
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -22,15 +23,27 @@ router = APIRouter(prefix="/api/control", tags=["control"])
 class StartSessionRequest(BaseModel):
     name: str = "dashboard-session"
     execution_mode: str = "paper"  # paper | live
-    trading_mode: str = "balanced"  # safe | balanced | aggressive
+    trading_mode: str = "balanced"  # safe | balanced | aggressive | custom
     starting_capital: float = 20000.0
     watchlist_path: str = "config/watchlist_seed.yaml"
     allow_watchlist_adjustment: bool = True
     model: str = "claude-haiku-4-5-20251001"
+    profit_reinvest_ratio: float = 0.5
+    # Custom mode risk params (only used when trading_mode == "custom")
+    custom_stop_loss: Optional[float] = None
+    custom_take_profit: Optional[float] = None
+    custom_max_positions: Optional[int] = None
+    custom_max_per_trade: Optional[float] = None
+    custom_max_deployed: Optional[float] = None
+    custom_daily_loss_limit: Optional[float] = None
 
 
 class TokenUpdateRequest(BaseModel):
     token: str
+
+
+class ReinvestUpdateRequest(BaseModel):
+    ratio: float  # 0.0 to 1.0
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
@@ -43,10 +56,12 @@ async def start_session(req: StartSessionRequest):
 
     if req.execution_mode not in ("paper", "live"):
         raise HTTPException(400, "execution_mode must be 'paper' or 'live'")
-    if req.trading_mode not in ("safe", "balanced", "aggressive"):
-        raise HTTPException(400, "trading_mode must be 'safe', 'balanced', or 'aggressive'")
+    if req.trading_mode not in ("safe", "balanced", "aggressive", "custom"):
+        raise HTTPException(400, "trading_mode must be 'safe', 'balanced', 'aggressive', or 'custom'")
     if req.starting_capital <= 0:
         raise HTTPException(400, "starting_capital must be positive")
+    if not 0.0 <= req.profit_reinvest_ratio <= 1.0:
+        raise HTTPException(400, "profit_reinvest_ratio must be between 0.0 and 1.0")
 
     server = get_server()
     result = server.start_session(
@@ -57,6 +72,13 @@ async def start_session(req: StartSessionRequest):
         watchlist_path=req.watchlist_path,
         allow_watchlist_adjustment=req.allow_watchlist_adjustment,
         model=req.model,
+        profit_reinvest_ratio=req.profit_reinvest_ratio,
+        custom_stop_loss=req.custom_stop_loss,
+        custom_take_profit=req.custom_take_profit,
+        custom_max_positions=req.custom_max_positions,
+        custom_max_per_trade=req.custom_max_per_trade,
+        custom_max_deployed=req.custom_max_deployed,
+        custom_daily_loss_limit=req.custom_daily_loss_limit,
     )
 
     if "error" in result:
@@ -108,6 +130,20 @@ async def close_session(session_id: int):
     return result
 
 
+@router.post("/sessions/{session_id}/reinvest")
+async def update_reinvest_ratio(session_id: int, req: ReinvestUpdateRequest):
+    """Update the profit reinvest ratio for a session (live-changeable)."""
+    from aaitrade import db
+
+    if not 0.0 <= req.ratio <= 1.0:
+        raise HTTPException(status_code=400, detail="ratio must be between 0.0 and 1.0")
+    session = db.query_one("SELECT id, status FROM sessions WHERE id = ?", (session_id,))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.update("sessions", session_id, {"profit_reinvest_ratio": req.ratio})
+    return {"session_id": session_id, "profit_reinvest_ratio": req.ratio}
+
+
 @router.post("/token")
 async def update_token(req: TokenUpdateRequest):
     """Update Kite access token for all active sessions."""
@@ -146,7 +182,7 @@ async def sync_portfolio(session_id: int):
 @router.get("/presets")
 async def get_presets():
     """Return available trading mode presets and their risk parameters."""
-    from aaitrade.config import RISK_PROFILES, MODE_MANDATES, TradingMode
+    from aaitrade.config import RISK_PROFILES, MODE_MANDATES, PROFIT_REINVEST_RATIO, TradingMode
 
     presets = {}
     for mode in TradingMode:
@@ -160,5 +196,6 @@ async def get_presets():
             "max_deployed": rules.max_deployed,
             "daily_loss_limit": rules.daily_loss_limit,
             "session_stop_loss": rules.session_stop_loss,
+            "suggested_reinvest_ratio": PROFIT_REINVEST_RATIO[mode],
         }
     return presets
