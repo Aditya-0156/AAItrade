@@ -1,8 +1,7 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench } from 'lucide-react'
 import { fetchSessions, fetchDecisions, fetchToolCalls } from '../api'
-import { useAppStore } from '../store'
 import type { Session, Decision, ToolCall } from '../types'
 
 function toIST(str: string) {
@@ -167,49 +166,20 @@ export function Activity() {
     queryFn: fetchSessions,
   })
 
-  // Load historical data on mount and when session changes
-  const { data: historicalDecisions = [], isLoading: loadingDecisions } = useQuery({
+  // Fetch decisions and tool calls with 30s polling
+  const { data: decisions = [], isLoading: loadingDecisions } = useQuery({
     queryKey: ['decisions', selectedSessionId],
     queryFn: () => fetchDecisions(selectedSessionId ?? undefined, 500),
-    staleTime: 10_000, // Cache for 10 seconds
+    refetchInterval: 30_000, // Poll every 30 seconds
+    staleTime: 5_000,
   })
 
-  const { data: historicalToolCalls = [], isLoading: loadingToolCalls } = useQuery({
+  const { data: toolCalls = [], isLoading: loadingToolCalls } = useQuery({
     queryKey: ['tool_calls', selectedSessionId],
     queryFn: () => fetchToolCalls(selectedSessionId ?? undefined, 1000),
-    staleTime: 10_000, // Cache for 10 seconds
+    refetchInterval: 30_000, // Poll every 30 seconds
+    staleTime: 5_000,
   })
-
-  // Merge historical data with real-time WebSocket data
-  const decisions = useMemo(() => {
-    const wsDecisions = feedItems
-      .filter((item) => item.type === 'decision')
-      .map((item) => item as any as Decision)
-
-    // Combine historical + real-time, deduplicate by ID
-    const allDecisions = [...historicalDecisions, ...wsDecisions]
-    const seen = new Set<number>()
-    return allDecisions.filter((d) => {
-      if (seen.has(d.id)) return false
-      seen.add(d.id)
-      return !selectedSessionId || d.session_id === selectedSessionId
-    })
-  }, [feedItems, historicalDecisions, selectedSessionId])
-
-  const toolCalls = useMemo(() => {
-    const wsToolCalls = feedItems
-      .filter((item) => item.type === 'tool_call')
-      .map((item) => item as any as ToolCall)
-
-    // Combine historical + real-time, deduplicate by ID
-    const allToolCalls = [...historicalToolCalls, ...wsToolCalls]
-    const seen = new Set<number>()
-    return allToolCalls.filter((tc) => {
-      if (seen.has(tc.id)) return false
-      seen.add(tc.id)
-      return !selectedSessionId || tc.session_id === selectedSessionId
-    })
-  }, [feedItems, historicalToolCalls, selectedSessionId])
 
   const isLoading = loadingDecisions || loadingToolCalls
 
