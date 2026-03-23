@@ -181,18 +181,18 @@ async def update_session_settings(session_id: int, req: SessionSettingsUpdateReq
         )
 
     # ── Validate individual field values ──
-    if req.stop_loss_pct is not None and req.stop_loss_pct <= 0:
-        raise HTTPException(status_code=400, detail="stop_loss_pct must be positive")
-    if req.take_profit_pct is not None and req.take_profit_pct <= 0:
-        raise HTTPException(status_code=400, detail="take_profit_pct must be positive")
+    if req.stop_loss_pct is not None and req.stop_loss_pct < 0:
+        raise HTTPException(status_code=400, detail="stop_loss_pct must be >= 0 (0 = disabled, LLM decides)")
+    if req.take_profit_pct is not None and req.take_profit_pct < 0:
+        raise HTTPException(status_code=400, detail="take_profit_pct must be >= 0 (0 = disabled, LLM decides)")
     if req.max_positions is not None and req.max_positions < 1:
         raise HTTPException(status_code=400, detail="max_positions must be at least 1")
     if req.max_per_trade_pct is not None and not (0 < req.max_per_trade_pct <= 100):
         raise HTTPException(status_code=400, detail="max_per_trade_pct must be between 0 and 100")
     if req.max_deployed_pct is not None and not (0 < req.max_deployed_pct <= 100):
         raise HTTPException(status_code=400, detail="max_deployed_pct must be between 0 and 100")
-    if req.daily_loss_limit_pct is not None and req.daily_loss_limit_pct <= 0:
-        raise HTTPException(status_code=400, detail="daily_loss_limit_pct must be positive")
+    if req.daily_loss_limit_pct is not None and req.daily_loss_limit_pct < 0:
+        raise HTTPException(status_code=400, detail="daily_loss_limit_pct must be >= 0 (0 = disabled, LLM decides)")
     if req.profit_reinvest_ratio is not None and not (0.0 <= req.profit_reinvest_ratio <= 1.0):
         raise HTTPException(status_code=400, detail="profit_reinvest_ratio must be between 0.0 and 1.0")
     if req.starting_capital is not None and req.starting_capital <= 0:

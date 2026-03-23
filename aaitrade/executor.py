@@ -159,9 +159,10 @@ class Executor:
             return {"status": "rejected", "reason": f"Trade exceeds {self.rules.human_alert_threshold}% alert threshold"}
 
         # 11. Compute stop-loss and take-profit if Claude didn't provide them
-        if not stop_loss_price:
+        # If the rule is 0, it means "no hard limit" — leave it to Claude's discretion
+        if not stop_loss_price and self.rules.stop_loss > 0:
             stop_loss_price = round(price * (1 - self.rules.stop_loss / 100), 2)
-        if not take_profit_price:
+        if not take_profit_price and self.rules.take_profit > 0:
             take_profit_price = round(price * (1 + self.rules.take_profit / 100), 2)
 
         # ── All checks passed — execute ──
@@ -534,6 +535,9 @@ class Executor:
             day_summary["starting_capital"] if day_summary
             else session["current_capital"]
         )
+        # 0 means disabled — LLM has full control, no hard daily limit
+        if self.rules.daily_loss_limit == 0:
+            return False
         loss_pct = abs(today_pnl) / base_capital * 100 if today_pnl < 0 else 0
         return loss_pct >= self.rules.daily_loss_limit
 
