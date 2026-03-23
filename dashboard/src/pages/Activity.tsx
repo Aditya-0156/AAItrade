@@ -161,27 +161,57 @@ export function Activity() {
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
   const [typeFilter, setTypeFilter] = useState<FeedItemType>('all')
   const feedItems = useAppStore((s) => s.feedItems)
-  const isLoading = false
 
   const { data: sessions = [] } = useQuery({
     queryKey: ['sessions'],
     queryFn: fetchSessions,
   })
 
-  // Get decisions and tool calls from WebSocket feed store
+  // Load historical data on mount and when session changes
+  const { data: historicalDecisions = [], isLoading: loadingDecisions } = useQuery({
+    queryKey: ['decisions', selectedSessionId],
+    queryFn: () => fetchDecisions(selectedSessionId ?? undefined, 500),
+    staleTime: 10_000, // Cache for 10 seconds
+  })
+
+  const { data: historicalToolCalls = [], isLoading: loadingToolCalls } = useQuery({
+    queryKey: ['tool_calls', selectedSessionId],
+    queryFn: () => fetchToolCalls(selectedSessionId ?? undefined, 1000),
+    staleTime: 10_000, // Cache for 10 seconds
+  })
+
+  // Merge historical data with real-time WebSocket data
   const decisions = useMemo(() => {
-    return feedItems
+    const wsDecisions = feedItems
       .filter((item) => item.type === 'decision')
       .map((item) => item as any as Decision)
-      .filter((d) => !selectedSessionId || d.session_id === selectedSessionId)
-  }, [feedItems, selectedSessionId])
+
+    // Combine historical + real-time, deduplicate by ID
+    const allDecisions = [...historicalDecisions, ...wsDecisions]
+    const seen = new Set<number>()
+    return allDecisions.filter((d) => {
+      if (seen.has(d.id)) return false
+      seen.add(d.id)
+      return !selectedSessionId || d.session_id === selectedSessionId
+    })
+  }, [feedItems, historicalDecisions, selectedSessionId])
 
   const toolCalls = useMemo(() => {
-    return feedItems
+    const wsToolCalls = feedItems
       .filter((item) => item.type === 'tool_call')
       .map((item) => item as any as ToolCall)
-      .filter((tc) => !selectedSessionId || tc.session_id === selectedSessionId)
-  }, [feedItems, selectedSessionId])
+
+    // Combine historical + real-time, deduplicate by ID
+    const allToolCalls = [...historicalToolCalls, ...wsToolCalls]
+    const seen = new Set<number>()
+    return allToolCalls.filter((tc) => {
+      if (seen.has(tc.id)) return false
+      seen.add(tc.id)
+      return !selectedSessionId || tc.session_id === selectedSessionId
+    })
+  }, [feedItems, historicalToolCalls, selectedSessionId])
+
+  const isLoading = loadingDecisions || loadingToolCalls
 
   type FeedItem =
     | { kind: 'decision'; ts: string; data: Decision }
