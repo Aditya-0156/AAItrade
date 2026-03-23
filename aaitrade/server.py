@@ -610,17 +610,38 @@ class TradingServer:
 
                 changes_text = "\n".join(change_lines)
 
+                # Build current settings summary for context
+                setting_notes = {
+                    "stop_loss_pct": "0 = DISABLED (no hard stop-loss limit — full LLM discretion)",
+                    "take_profit_pct": "0 = DISABLED (no hard take-profit limit — full LLM discretion)",
+                    "daily_loss_limit_pct": "0 = DISABLED (no daily loss circuit breaker — full LLM discretion)",
+                }
+                current_summary_lines = []
+                for key, note in setting_notes.items():
+                    val = new_settings.get(key)
+                    if val == 0:
+                        current_summary_lines.append(f"- {key}: {note}")
+                    elif val is not None:
+                        current_summary_lines.append(f"- {key}: {val}")
+                current_summary = "\n".join(current_summary_lines) if current_summary_lines else ""
+
                 notification_prompt = (
                     "SETTINGS CHANGE NOTIFICATION\n\n"
                     "The user has updated session settings. Here are the changes:\n"
                     f"{changes_text}\n\n"
+                    "IMPORTANT — VALUE MEANINGS:\n"
+                    "- A value of 0 for stop_loss_pct, take_profit_pct, or daily_loss_limit_pct "
+                    "means that limit is DISABLED. There is NO hard percentage rule. "
+                    "You have full discretion to hold, exit, or manage positions as you see fit.\n"
+                    "- A non-zero value means that percentage is a hard cap enforced by the system.\n\n"
+                    f"CURRENT ACTIVE SETTINGS AFTER THIS CHANGE:\n{current_summary}\n\n"
                     "Your existing positions and their current stop/take-profit "
                     "PRICES in the portfolio are unchanged.\n"
                     "You may now:\n"
-                    "1. Review your open positions and decide if stop/take-profit "
-                    "PRICES should be adjusted (note in your thesis updates)\n"
-                    "2. Update your session memory to reflect the new risk parameters\n"
-                    "3. Update any trade theses if needed\n\n"
+                    "1. Review your open positions and update your thesis notes to reflect "
+                    "the new risk framework (especially if any limit changed to/from 0)\n"
+                    "2. Update your session memory to accurately reflect the current settings\n"
+                    "3. Adjust your strategy notes for any implications\n\n"
                     "You are NOT allowed to BUY or SELL in this notification cycle. "
                     "Only review and update your notes.\n\n"
                     "When done, respond with a brief JSON confirmation:\n"
