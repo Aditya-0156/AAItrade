@@ -349,10 +349,38 @@ class TradingServer:
         logger.info(f"Recovered {len(rows)} session(s)")
 
     def update_kite_token(self, token: str) -> dict:
-        """Update Kite access token for all active sessions."""
+        """Update Kite access token for all active sessions and persist to .env."""
         self._ensure_initialized()
 
         os.environ["KITE_ACCESS_TOKEN"] = token
+
+        # Persist to .env file
+        env_path = Path(__file__).parent.parent / ".env"
+        try:
+            # Read current .env
+            env_content = ""
+            if env_path.exists():
+                with open(env_path, "r") as f:
+                    env_content = f.read()
+
+            # Replace or add KITE_ACCESS_TOKEN line
+            lines = env_content.split("\n")
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith("KITE_ACCESS_TOKEN="):
+                    lines[i] = f"KITE_ACCESS_TOKEN={token}"
+                    found = True
+                    break
+            if not found:
+                lines.append(f"KITE_ACCESS_TOKEN={token}")
+
+            # Write back
+            with open(env_path, "w") as f:
+                f.write("\n".join(lines))
+
+            logger.info(f"Token persisted to .env file")
+        except Exception as e:
+            logger.error(f"Failed to persist token to .env: {e}")
 
         # Update live Kite client
         try:
@@ -360,11 +388,11 @@ class TradingServer:
             if _kite is not None:
                 _kite.set_access_token(token)
                 set_kite_client(_kite)
-                return {"status": "ok", "message": "Token updated and applied live"}
+                return {"status": "ok", "message": "Token updated, applied live, and persisted to .env"}
             else:
-                return {"status": "ok", "message": "Token saved, will apply on next session start"}
+                return {"status": "ok", "message": "Token saved to .env, will apply on next session start"}
         except Exception as e:
-            return {"status": "error", "message": f"Token saved but live update failed: {e}"}
+            return {"status": "error", "message": f"Token saved to .env but live update failed: {e}"}
 
     def get_running_sessions(self) -> list[int]:
         """Return IDs of sessions with active threads."""
