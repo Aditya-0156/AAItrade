@@ -230,7 +230,7 @@ class TradingServer:
         return {"session_id": session_id, "status": "paused"}
 
     def resume_session(self, session_id: int) -> dict:
-        """Resume a paused session."""
+        """Resume a paused session, or re-recover an active session whose thread died."""
         self._ensure_initialized()
 
         session = db.query_one(
@@ -238,12 +238,20 @@ class TradingServer:
         )
         if not session:
             return {"error": f"Session {session_id} not found"}
-        if session["status"] != "paused":
+
+        with self._lock:
+            already_running = session_id in self._sessions
+
+        # Allow resume for paused sessions, or active sessions not running in-memory
+        if session["status"] == "paused":
+            db.update("sessions", session_id, {"status": "active"})
+        elif session["status"] == "active" and not already_running:
+            # Thread died / failed recovery — re-recover without changing DB status
+            pass
+        else:
             return {"error": f"Session is {session['status']}, can only resume paused sessions"}
 
-        db.update("sessions", session_id, {"status": "active"})
-
-        # If the thread isn't running, restart it
+        # Start thread if not already running
         with self._lock:
             if session_id not in self._sessions:
                 self._recover_session(session_id)
