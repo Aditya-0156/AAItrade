@@ -35,24 +35,18 @@ function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 })
 }
 
-// ── Slider helper ────────────────────────────────────────────────────────
+// ── Number input helper ──────────────────────────────────────────────────
 
-function SliderField({
+function NumberField({
   label,
   description,
   value,
-  min,
-  max,
-  step,
   unit,
   onChange,
 }: {
   label: string
   description: string
   value: number
-  min: number
-  max: number
-  step: number
   unit: string
   onChange: (v: number) => void
 }) {
@@ -61,18 +55,19 @@ function SliderField({
       <div className="flex items-center justify-between mb-1">
         <label className="text-xs text-gray-400">{label}</label>
         <span className="text-xs font-mono text-violet-300">
-          {unit === '%' ? `${value}%` : unit === 'int' ? value : `${value}${unit}`}
+          {unit === '%' ? `${value}%` : unit === 'int' ? value : `${value}`}
         </span>
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-violet-500"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          step={unit === '%' ? 0.5 : 1}
+          className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+        />
+        {unit === '%' && <span className="text-xs text-gray-500">%</span>}
+      </div>
       <p className="text-xs text-gray-600 mt-0.5">{description}</p>
     </div>
   )
@@ -233,7 +228,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
           <div className="bg-gray-800/40 rounded-lg p-4 space-y-4 border border-gray-700">
             <div className="text-xs font-semibold text-gray-300 mb-2">Custom Risk Parameters</div>
 
-            <SliderField
+            <NumberField
               label="Stop Loss %"
               description="Exit position automatically if it falls by this percentage. Lower = safer but more frequent stops."
               value={form.custom_stop_loss ?? 3.0}
@@ -243,7 +238,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               unit="%"
               onChange={(v) => setForm({ ...form, custom_stop_loss: v })}
             />
-            <SliderField
+            <NumberField
               label="Take Profit %"
               description="Lock in gains when position rises by this percentage. Lower = more frequent smaller wins."
               value={form.custom_take_profit ?? 5.0}
@@ -253,7 +248,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               unit="%"
               onChange={(v) => setForm({ ...form, custom_take_profit: v })}
             />
-            <SliderField
+            <NumberField
               label="Max Open Positions"
               description="Maximum number of stocks held simultaneously. More = diversified but harder to monitor."
               value={form.custom_max_positions ?? 5}
@@ -263,7 +258,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               unit="int"
               onChange={(v) => setForm({ ...form, custom_max_positions: v })}
             />
-            <SliderField
+            <NumberField
               label="Max Per Trade %"
               description="Maximum % of capital that can be committed to a single trade. Limits concentration risk."
               value={form.custom_max_per_trade ?? 20.0}
@@ -273,7 +268,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               unit="%"
               onChange={(v) => setForm({ ...form, custom_max_per_trade: v })}
             />
-            <SliderField
+            <NumberField
               label="Max Deployed %"
               description="Maximum % of total capital that can be in open positions at once. Keeps cash buffer."
               value={form.custom_max_deployed ?? 90.0}
@@ -283,7 +278,7 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               unit="%"
               onChange={(v) => setForm({ ...form, custom_max_deployed: v })}
             />
-            <SliderField
+            <NumberField
               label="Daily Loss Limit %"
               description="Halt all trading for the day if total losses reach this % of capital. Hard circuit breaker."
               value={form.custom_daily_loss_limit ?? 5.0}
@@ -298,28 +293,24 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
 
         {/* Profit reinvest ratio — shown for ALL modes */}
         <div className="bg-gray-800/40 rounded-lg p-4 border border-gray-700">
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-gray-300 font-medium">Profit Reinvestment Ratio</label>
-            <span className="text-xs font-mono text-violet-300">{reinvestLabel}</span>
+          <label className="block text-xs text-gray-300 font-medium mb-2">Profit Reinvestment %</label>
+          <div className="flex items-center gap-2 mb-2">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round((form.profit_reinvest_ratio ?? 0.5) * 100)}
+              onChange={(e) => setForm({ ...form, profit_reinvest_ratio: Number(e.target.value) / 100 })}
+              className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+            />
+            <span className="text-xs text-gray-500">%</span>
           </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={form.profit_reinvest_ratio ?? 0.5}
-            onChange={(e) => setForm({ ...form, profit_reinvest_ratio: Number(e.target.value) })}
-            className="w-full accent-violet-500"
-          />
-          <div className="flex justify-between text-xs text-gray-600 mt-0.5">
-            <span>Secure All</span>
-            <span>50/50 Split</span>
-            <span>Reinvest All</span>
-          </div>
+          <p className="text-xs text-gray-600">
+            {reinvestLabel}
+          </p>
           <p className="text-xs text-gray-600 mt-1.5">
-            When a position is sold at a profit, this controls how much goes back into free cash
-            vs. secured (locked, not re-traded). 0% = all profit locked away; 100% = all profit
-            returned to trading capital.
+            When selling at profit: 0% = secure all (keep safe); 100% = reinvest all (compound returns).
           </p>
         </div>
 
@@ -516,29 +507,25 @@ function SessionControlRow({ session }: { session: Session }) {
         </div>
       </div>
 
-      {/* Reinvest ratio slider (expandable) */}
+      {/* Reinvest ratio input (expandable) */}
       {showReinvest && (
         <div className="mt-3 p-3 bg-gray-800/60 rounded-lg border border-gray-700">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-400">Profit Reinvest Ratio</span>
-            <span className="text-xs font-mono text-violet-300">
-              {reinvestPct}% reinvested · {100 - reinvestPct}% secured
-            </span>
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-gray-400 flex-1">Reinvest %</label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={reinvestPct}
+              onChange={(e) => setReinvestValue(Number(e.target.value) / 100)}
+              className="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            />
+            <span className="text-xs text-gray-500">%</span>
           </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={reinvestValue}
-            onChange={(e) => setReinvestValue(Number(e.target.value))}
-            className="w-full accent-violet-500"
-          />
-          <div className="flex justify-between text-xs text-gray-600 mt-0.5 mb-2">
-            <span>Secure All</span>
-            <span>50/50</span>
-            <span>Reinvest All</span>
-          </div>
+          <p className="text-xs text-gray-600 mb-2">
+            {reinvestPct}% reinvested, {100 - reinvestPct}% secured
+          </p>
           <button
             onClick={() => reinvestMut.mutate(reinvestValue)}
             disabled={reinvestMut.isPending}
