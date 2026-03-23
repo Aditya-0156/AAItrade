@@ -78,6 +78,13 @@ class SessionManager:
             "profit_reinvest_ratio": self.config.profit_reinvest_ratio,
             "status": "active",
             "started_at": db.now_iso(),
+            # Risk settings
+            "stop_loss_pct": self.config.risk_rules.stop_loss,
+            "take_profit_pct": self.config.risk_rules.take_profit,
+            "max_positions": self.config.risk_rules.max_positions,
+            "max_per_trade_pct": self.config.risk_rules.max_per_trade,
+            "max_deployed_pct": self.config.risk_rules.max_deployed,
+            "daily_loss_limit_pct": self.config.risk_rules.daily_loss_limit,
             "config_json": json.dumps({
                 "execution_mode": self.config.execution_mode.value,
                 "trading_mode": self.config.trading_mode.value,

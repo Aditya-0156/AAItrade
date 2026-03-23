@@ -55,6 +55,18 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Add risk settings columns if missing
+    try:
+        with get_connection() as conn:
+            conn.execute("ALTER TABLE sessions ADD COLUMN stop_loss_pct REAL DEFAULT 3.0")
+            conn.execute("ALTER TABLE sessions ADD COLUMN take_profit_pct REAL DEFAULT 5.0")
+            conn.execute("ALTER TABLE sessions ADD COLUMN max_positions INTEGER DEFAULT 5")
+            conn.execute("ALTER TABLE sessions ADD COLUMN max_per_trade_pct REAL DEFAULT 20.0")
+            conn.execute("ALTER TABLE sessions ADD COLUMN max_deployed_pct REAL DEFAULT 90.0")
+            conn.execute("ALTER TABLE sessions ADD COLUMN daily_loss_limit_pct REAL DEFAULT 5.0")
+    except Exception:
+        pass  # Columns already exist
+
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
