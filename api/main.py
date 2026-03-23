@@ -1,8 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from api.routers import sessions, trades, portfolio, decisions, tool_calls, journal, summary
 from api.routers import control
@@ -10,6 +13,8 @@ from api.ws.feed import websocket_feed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_DIST = Path(__file__).resolve().parent.parent / "dashboard" / "dist"
 
 
 @asynccontextmanager
@@ -33,11 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,6 +70,19 @@ async def health():
 @app.websocket("/ws/feed")
 async def ws_feed(websocket: WebSocket):
     await websocket_feed(websocket)
+
+
+# Serve built dashboard as static files (if dist/ exists)
+# Falls back gracefully if not built yet — API still works.
+if _DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str = ""):
+        # API and WS routes are matched first — this only catches frontend routes
+        index = _DIST / "index.html"
+        return FileResponse(str(index))
 
 
 if __name__ == "__main__":
