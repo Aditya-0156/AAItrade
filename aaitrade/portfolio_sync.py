@@ -125,17 +125,10 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
                     f"(qty={kite_pos['quantity']}, avg=₹{kite_pos.get('average_price', 0):.2f})"
                 )
 
-        # Sync current_capital with Kite margins
-        try:
-            margins = kite.margins("equity")
-            available_cash = margins.get("available", {}).get("live_balance", 0)
-            # Update session capital to match real available funds
-            db.update("sessions", session_id, {
-                "current_capital": round(available_cash, 2),
-            })
-            logger.info(f"SYNC: Updated session capital to ₹{available_cash:,.2f} from Kite margins")
-        except Exception as e:
-            logger.warning(f"SYNC: Could not fetch Kite margins: {e}")
+        # NOTE: Do NOT sync current_capital with Kite margins!
+        # Reason: Zerodha account may have money unrelated to this session.
+        # Current capital is tracked internally by the system (gains/losses from trades).
+        # We only sync positions (holdings), not cash balance.
 
     except Exception as e:
         logger.error(f"Portfolio sync failed: {e}", exc_info=True)
