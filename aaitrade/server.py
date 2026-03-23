@@ -362,8 +362,22 @@ class TradingServer:
         logger.info(f"Recovered {len(rows)} session(s)")
 
     def update_kite_token(self, token: str) -> dict:
-        """Update Kite access token for all active sessions and persist to .env."""
+        """Update Kite access token for all active sessions and persist to .env.
+
+        If token is a request_token (from login URL), automatically exchange it for access_token.
+        """
         self._ensure_initialized()
+
+        # If token looks like a request_token, exchange it for access_token
+        if len(token) < 50:  # request_tokens are typically 32 chars, access_tokens are longer
+            try:
+                from kiteconnect import KiteConnect
+                kite = KiteConnect(api_key="9dz93b78apapfn1l")
+                data = kite.generate_session(token, api_secret="071tnt5srh72p63b96mh8s8btw9gogyk")
+                token = data['access_token']
+                logger.info("Converted request_token to access_token")
+            except Exception as e:
+                return {"status": "error", "message": f"Failed to exchange request_token: {e}. Token may have expired (valid for 2 minutes after login)."}
 
         os.environ["KITE_ACCESS_TOKEN"] = token
 
