@@ -566,6 +566,13 @@ class TradingServer:
                 manager = st.manager
                 claude = manager.claude
 
+                # Determine cycle number — use next after the latest recorded decision
+                latest = db.query_one(
+                    "SELECT MAX(cycle_number) as max_cycle FROM decisions WHERE session_id = ?",
+                    (session_id,),
+                )
+                cycle_number = (latest["max_cycle"] or 0) + 1
+
                 # Build human-readable diff of changes
                 change_lines = []
                 labels = {
@@ -620,7 +627,7 @@ class TradingServer:
                     '{"action": "HOLD", "symbol": null, "quantity": null, '
                     '"stop_loss_price": null, "take_profit_price": null, '
                     '"reason": "Settings change acknowledged — [your summary]", '
-                    '"confidence": "high", "flags": []}'
+                    '"confidence": "high", "flags": ["SETTINGS_UPDATE"]}'
                 )
 
                 system_prompt = (
@@ -665,10 +672,18 @@ class TradingServer:
                         for block in response.content:
                             if block.type == "tool_use":
                                 logger.info(
-                                    f"Settings notification | Tool: {block.name}"
-                                    f"({block.input})"
+                                    f"Settings notification | Tool: {block.name}({block.input})"
                                 )
                                 result = call_tool(block.name, block.input)
+                                # Save tool call to DB so it appears in activity feed
+                                db.insert("tool_calls", {
+                                    "session_id": session_id,
+                                    "cycle_number": cycle_number,
+                                    "tool_name": block.name,
+                                    "parameters": json.dumps(block.input),
+                                    "result_summary": str(result)[:300] if result else None,
+                                    "called_at": db.now_iso(),
+                                })
                                 tool_results.append({
                                     "type": "tool_result",
                                     "tool_use_id": block.id,
@@ -683,15 +698,36 @@ class TradingServer:
                         for block in response.content:
                             if hasattr(block, "text"):
                                 text += block.text
+
+                        # Save a HOLD decision so it shows in activity feed with SETTINGS_UPDATE flag
+                        decision_reason = f"Settings updated by user: {changes_text}"
+                        if text:
+                            # Try to parse Claude's JSON response for the reason
+                            try:
+                                parsed = json.loads(text.strip())
+                                decision_reason = parsed.get("reason", decision_reason)
+                            except Exception:
+                                pass
+                        db.insert("decisions", {
+                            "session_id": session_id,
+                            "cycle_number": cycle_number,
+                            "action": "HOLD",
+                            "symbol": None,
+                            "quantity": None,
+                            "reason": decision_reason,
+                            "confidence": "high",
+                            "flags": json.dumps(["SETTINGS_UPDATE"]),
+                            "raw_json": json.dumps({"action": "HOLD", "reason": decision_reason, "flags": ["SETTINGS_UPDATE"]}),
+                            "decided_at": db.now_iso(),
+                        })
+
                         logger.info(
-                            f"Settings notification complete for session "
-                            f"{session_id}: {text[:200]}"
+                            f"Settings notification complete for session {session_id}: {text[:200]}"
                         )
                         return
                     else:
                         logger.warning(
-                            f"Settings notification unexpected stop: "
-                            f"{response.stop_reason}"
+                            f"Settings notification unexpected stop: {response.stop_reason}"
                         )
                         return
 

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench } from 'lucide-react'
+import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench, Settings } from 'lucide-react'
 import { fetchSessions, fetchDecisions, fetchToolCalls } from '../api'
 import type { Session, Decision, ToolCall } from '../types'
 
@@ -60,16 +60,25 @@ function actionColor(action: string): string {
 
 function DecisionRow({ decision }: { decision: Decision }) {
   const flags = parseFlags(decision.flags)
-  const color = actionColor(decision.action)
+  const isSettingsUpdate = flags.includes('SETTINGS_UPDATE')
+  const color = isSettingsUpdate
+    ? 'border-l-violet-500 bg-violet-500/5'
+    : actionColor(decision.action)
 
   return (
     <div className={`border-l-2 pl-3 py-2 pr-3 rounded-r-lg ${color} mb-1.5`}>
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-2 flex-wrap min-w-0">
-          <ActionIcon action={decision.action} />
+          {isSettingsUpdate ? (
+            <Settings size={14} className="text-violet-400" />
+          ) : (
+            <ActionIcon action={decision.action} />
+          )}
           <span
             className={`font-semibold text-sm ${
-              decision.action === 'BUY'
+              isSettingsUpdate
+                ? 'text-violet-400'
+                : decision.action === 'BUY'
                 ? 'text-emerald-400'
                 : decision.action === 'SELL'
                 ? 'text-red-400'
@@ -78,7 +87,7 @@ function DecisionRow({ decision }: { decision: Decision }) {
                 : 'text-gray-400'
             }`}
           >
-            {decision.action}
+            {isSettingsUpdate ? 'SETTINGS' : decision.action}
           </span>
           {decision.symbol && (
             <span className="font-mono text-sm font-semibold text-gray-100">
