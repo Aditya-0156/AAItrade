@@ -187,31 +187,40 @@ class SessionManager:
         # Reporter
         self.reporter = Reporter(self.config, self.session_id, self.claude)
 
-        # Kite client (REQUIRED — no fallback to yfinance)
-        if not self.keys.kite_api_key or not self.keys.kite_access_token:
+        # Kite client — required for live mode, optional for paper (falls back to yfinance)
+        is_live = self.config.execution_mode.value == "live"
+
+        if is_live and (not self.keys.kite_api_key or not self.keys.kite_access_token):
             raise RuntimeError(
-                "KITE_API_KEY and KITE_ACCESS_TOKEN must be set in .env. "
+                "KITE_API_KEY and KITE_ACCESS_TOKEN must be set in .env for live trading. "
                 "Run refresh_token.py to get a fresh token."
             )
 
-        try:
-            from kiteconnect import KiteConnect
-            kite = KiteConnect(api_key=self.keys.kite_api_key, timeout=15)
-            kite.set_access_token(self.keys.kite_access_token)
+        if self.keys.kite_api_key and self.keys.kite_access_token:
+            try:
+                from kiteconnect import KiteConnect
+                kite = KiteConnect(api_key=self.keys.kite_api_key, timeout=15)
+                kite.set_access_token(self.keys.kite_access_token)
 
-            # Validate token works before proceeding
-            profile = kite.profile()
-            logger.info(f"Kite Connect initialized — logged in as {profile['user_name']}")
+                # Validate token works before proceeding
+                profile = kite.profile()
+                logger.info(f"Kite Connect initialized — logged in as {profile['user_name']}")
 
-            from aaitrade.tools.market import set_kite_client as set_market_kite
-            from aaitrade.tools.watchlist_tools import set_kite_client as set_watchlist_kite
-            from aaitrade.executor import set_kite_client as set_executor_kite
+                from aaitrade.tools.market import set_kite_client as set_market_kite
+                from aaitrade.tools.watchlist_tools import set_kite_client as set_watchlist_kite
+                from aaitrade.executor import set_kite_client as set_executor_kite
 
-            set_market_kite(kite)
-            set_watchlist_kite(kite)
-            set_executor_kite(kite)
-        except Exception as e:
-            raise RuntimeError(f"Kite Connect initialization failed: {e}. Check .env keys.")
+                set_market_kite(kite)
+                set_watchlist_kite(kite)
+                set_executor_kite(kite)
+            except Exception as e:
+                if is_live:
+                    raise RuntimeError(f"Kite Connect initialization failed: {e}. Check .env keys.")
+                else:
+                    logger.warning(
+                        f"Kite Connect unavailable (token expired?): {e}. "
+                        "Paper session will use yfinance for market data."
+                    )
 
         # NewsAPI client
         if self.keys.newsapi:
