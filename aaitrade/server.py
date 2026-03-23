@@ -303,7 +303,20 @@ class TradingServer:
         manager = SessionManager(config, self._keys, name=session["name"])
         manager.session_id = session_id
         manager._recovered = True
-        manager._init_clients()
+
+        # Try to init clients; if Kite token is bad, log warning and skip recovery
+        # (user will need to update token in dashboard before session can start)
+        try:
+            manager._init_clients()
+        except RuntimeError as e:
+            if "Kite Connect" in str(e):
+                logger.warning(
+                    f"Session {session_id} ({session['name']}) could not be recovered: {e}. "
+                    "Update the Kite token in the dashboard and restart manually."
+                )
+                return
+            else:
+                raise
 
         from aaitrade.tools import load_all_tools, disable_tool
         load_all_tools()
