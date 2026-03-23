@@ -651,7 +651,7 @@ class TradingServer:
                     try:
                         response = claude.client.messages.create(
                             model=claude.model,
-                            max_tokens=1024,
+                            max_tokens=4096,
                             system=system_prompt,
                             tools=tools,
                             messages=messages,
