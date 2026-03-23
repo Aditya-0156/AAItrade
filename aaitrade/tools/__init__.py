@@ -95,10 +95,18 @@ def call_tool(name: str, arguments: dict[str, Any]) -> Any:
         return {"error": f"Tool '{name}' failed: {str(e)}"}
 
 
-def get_tools_for_api() -> list[dict]:
-    """Return tool definitions formatted for the Anthropic API."""
+def get_tools_for_api(only: list[str] | None = None) -> list[dict]:
+    """Return tool definitions formatted for the Anthropic API.
+
+    Args:
+        only: If provided, return only tools whose names are in this list.
+              If None, return all enabled tools.
+    """
     tools = []
-    for tool in get_enabled_tools().values():
+    source = get_enabled_tools()
+    for tool in source.values():
+        if only is not None and tool.name not in only:
+            continue
         tools.append({
             "name": tool.name,
             "description": tool.description,

@@ -12,6 +12,12 @@ export interface Session {
   started_at: string
   ended_at: string | null
   profit_reinvest_ratio: number
+  stop_loss_pct: number | null
+  take_profit_pct: number | null
+  max_positions: number | null
+  max_per_trade_pct: number | null
+  max_deployed_pct: number | null
+  daily_loss_limit_pct: number | null
 }
 
 export interface Trade {

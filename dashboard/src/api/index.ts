@@ -122,3 +122,8 @@ export async function updateReinvestRatio(sessionId: number, ratio: number) {
   const { data } = await client.post(`/api/control/sessions/${sessionId}/reinvest`, { ratio })
   return data
 }
+
+export async function updateSessionSettings(sessionId: number, settings: Record<string, any>): Promise<any> {
+  const { data } = await client.put(`/api/control/sessions/${sessionId}/settings`, settings)
+  return data
+}

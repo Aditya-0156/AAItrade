@@ -13,6 +13,9 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
+  X,
+  Check,
+  Pencil,
 } from 'lucide-react'
 import {
   fetchSessions,
@@ -26,6 +29,7 @@ import {
   fetchRunning,
   syncPortfolio,
   updateReinvestRatio,
+  updateSessionSettings,
 } from '../api'
 import type { StartSessionParams } from '../api'
 import { StatusBadge, ModeBadge } from '../components/shared/StatusBadge'
@@ -55,7 +59,7 @@ function NumberField({
       <div className="flex items-center justify-between mb-1">
         <label className="text-xs text-gray-400">{label}</label>
         <span className="text-xs font-mono text-violet-300">
-          {unit === '%' ? `${value}%` : unit === 'int' ? value : `${value}`}
+          {unit === '%' ? `${value}%` : unit === '₹' ? `₹${value.toLocaleString('en-IN')}` : unit === 'int' ? value : `${value}`}
         </span>
       </div>
       <div className="flex items-center gap-2">
@@ -63,10 +67,11 @@ function NumberField({
           type="number"
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          step={unit === '%' ? 0.5 : 1}
+          step={unit === '%' ? 0.5 : unit === '₹' ? 1000 : 1}
           className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
         />
         {unit === '%' && <span className="text-xs text-gray-500">%</span>}
+        {unit === '₹' && <span className="text-xs text-gray-500">₹</span>}
       </div>
       <p className="text-xs text-gray-600 mt-0.5">{description}</p>
     </div>
@@ -374,11 +379,216 @@ function TokenUpdate() {
   )
 }
 
+// ── Session Settings Editor ─────────────────────────────────────────────
+
+function SessionSettingsEditor({
+  session,
+  onClose,
+}: {
+  session: Session
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+
+  // Build initial values from session's current settings, with sensible defaults
+  const initial = {
+    add_capital: 0,
+    stop_loss_pct: session.stop_loss_pct ?? 3.0,
+    take_profit_pct: session.take_profit_pct ?? 5.0,
+    max_positions: session.max_positions ?? 5,
+    max_per_trade_pct: session.max_per_trade_pct ?? 20.0,
+    max_deployed_pct: session.max_deployed_pct ?? 90.0,
+    daily_loss_limit_pct: session.daily_loss_limit_pct ?? 5.0,
+    profit_reinvest_pct: Math.round((session.profit_reinvest_ratio ?? 0.5) * 100),
+  }
+
+  const [form, setForm] = useState(initial)
+  const [notifyClaude, setNotifyClaude] = useState(true)
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+
+  const mutation = useMutation({
+    mutationFn: (payload: Record<string, any>) =>
+      updateSessionSettings(session.id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      setFeedback({ type: 'success', msg: 'Settings updated successfully.' })
+    },
+    onError: (err: Error) => {
+      setFeedback({ type: 'error', msg: err.message || 'Failed to update settings.' })
+    },
+  })
+
+  const handleApply = () => {
+    setFeedback(null)
+
+    // Only send fields that actually changed from the initial values
+    const payload: Record<string, any> = {}
+
+    if (form.add_capital > 0) payload.add_capital = form.add_capital
+    if (form.stop_loss_pct !== initial.stop_loss_pct) payload.stop_loss_pct = form.stop_loss_pct
+    if (form.take_profit_pct !== initial.take_profit_pct) payload.take_profit_pct = form.take_profit_pct
+    if (form.max_positions !== initial.max_positions) payload.max_positions = form.max_positions
+    if (form.max_per_trade_pct !== initial.max_per_trade_pct) payload.max_per_trade_pct = form.max_per_trade_pct
+    if (form.max_deployed_pct !== initial.max_deployed_pct) payload.max_deployed_pct = form.max_deployed_pct
+    if (form.daily_loss_limit_pct !== initial.daily_loss_limit_pct) payload.daily_loss_limit_pct = form.daily_loss_limit_pct
+    if (form.profit_reinvest_pct !== initial.profit_reinvest_pct) {
+      payload.profit_reinvest_ratio = form.profit_reinvest_pct / 100
+    }
+
+    if (Object.keys(payload).length === 0) {
+      setFeedback({ type: 'error', msg: 'No changes to apply.' })
+      return
+    }
+
+    payload.notify_claude = notifyClaude
+    mutation.mutate(payload)
+  }
+
+  return (
+    <div className="mt-3 bg-gray-800/60 rounded-lg border border-gray-700 p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+          <Settings size={14} /> Edit Session Settings
+        </span>
+        <button
+          onClick={onClose}
+          className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-gray-300 transition-colors"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Add Capital */}
+        <NumberField
+          label="Add Capital"
+          description="Extra capital to inject. Added to both starting and current capital."
+          value={form.add_capital}
+          unit="₹"
+          onChange={(v) => setForm({ ...form, add_capital: v })}
+        />
+
+        {/* Stop Loss % */}
+        <NumberField
+          label="Stop Loss %"
+          description="Exit position if it falls by this %. Lower = safer, more frequent stops."
+          value={form.stop_loss_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, stop_loss_pct: v })}
+        />
+
+        {/* Take Profit % */}
+        <NumberField
+          label="Take Profit %"
+          description="Lock in gains when position rises by this %. Lower = smaller, more frequent wins."
+          value={form.take_profit_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, take_profit_pct: v })}
+        />
+
+        {/* Max Positions */}
+        <NumberField
+          label="Max Positions"
+          description="Max stocks held at once. More = diversified but harder to monitor."
+          value={form.max_positions}
+          unit="int"
+          onChange={(v) => setForm({ ...form, max_positions: v })}
+        />
+
+        {/* Max Per Trade % */}
+        <NumberField
+          label="Max Per Trade %"
+          description="Max % of capital in a single trade. Limits concentration risk."
+          value={form.max_per_trade_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, max_per_trade_pct: v })}
+        />
+
+        {/* Max Deployed % */}
+        <NumberField
+          label="Max Deployed %"
+          description="Max % of total capital in open positions at once. Keeps a cash buffer."
+          value={form.max_deployed_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, max_deployed_pct: v })}
+        />
+
+        {/* Daily Loss Limit % */}
+        <NumberField
+          label="Daily Loss Limit %"
+          description="Halt all trading if daily losses hit this % of capital. Hard circuit breaker."
+          value={form.daily_loss_limit_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, daily_loss_limit_pct: v })}
+        />
+
+        {/* Profit Reinvestment % */}
+        <NumberField
+          label="Profit Reinvestment %"
+          description={`${form.profit_reinvest_pct}% reinvested, ${100 - form.profit_reinvest_pct}% secured. 0 = secure all, 100 = compound all.`}
+          value={form.profit_reinvest_pct}
+          unit="%"
+          onChange={(v) => setForm({ ...form, profit_reinvest_pct: Math.max(0, Math.min(100, v)) })}
+        />
+      </div>
+
+      {/* Notify Claude checkbox */}
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={notifyClaude}
+          onChange={(e) => setNotifyClaude(e.target.checked)}
+          className="rounded border-gray-600 bg-gray-800 text-violet-500 focus:ring-violet-500"
+        />
+        <span className="text-xs text-gray-400">
+          Notify Claude of changes (triggers a mini review of current thesis)
+        </span>
+      </label>
+
+      {/* Feedback */}
+      {feedback && (
+        <div
+          className={`text-xs rounded p-2 ${
+            feedback.type === 'success'
+              ? 'text-green-400 bg-green-400/10'
+              : 'text-red-400 bg-red-400/10'
+          }`}
+        >
+          {feedback.msg}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleApply}
+          disabled={mutation.isPending}
+          className="bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium px-4 py-1.5 rounded flex items-center gap-1.5 transition-colors"
+        >
+          {mutation.isPending ? (
+            <RefreshCw size={12} className="animate-spin" />
+          ) : (
+            <Check size={12} />
+          )}
+          Apply Changes
+        </button>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-gray-200 text-xs px-3 py-1.5 rounded hover:bg-gray-700 transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Session Control Row ─────────────────────────────────────────────────
 
 function SessionControlRow({ session }: { session: Session }) {
   const queryClient = useQueryClient()
   const [showReinvest, setShowReinvest] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [reinvestValue, setReinvestValue] = useState(session.profit_reinvest_ratio ?? 0.5)
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['sessions'] })
 
@@ -419,9 +629,20 @@ function SessionControlRow({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Edit settings */}
+          {(session.status === 'active' || session.status === 'paused') && (
+            <button
+              onClick={() => { setShowSettings(!showSettings); if (!showSettings) setShowReinvest(false) }}
+              className={`p-1.5 rounded hover:bg-gray-700 transition-colors ${showSettings ? 'text-violet-400' : 'text-gray-400 hover:text-violet-400'}`}
+              title="Edit session settings"
+            >
+              <Pencil size={14} />
+            </button>
+          )}
+
           {/* Reinvest ratio toggle */}
           <button
-            onClick={() => setShowReinvest(!showReinvest)}
+            onClick={() => { setShowReinvest(!showReinvest); if (!showReinvest) setShowSettings(false) }}
             className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-violet-400 transition-colors"
             title="Adjust reinvest ratio"
           >
@@ -520,6 +741,14 @@ function SessionControlRow({ session }: { session: Session }) {
             <span className="text-xs text-green-400 ml-2">Saved</span>
           )}
         </div>
+      )}
+
+      {/* Session settings editor (expandable) */}
+      {showSettings && (
+        <SessionSettingsEditor
+          session={session}
+          onClose={() => setShowSettings(false)}
+        />
       )}
     </div>
   )

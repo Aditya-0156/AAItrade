@@ -46,6 +46,19 @@ class ReinvestUpdateRequest(BaseModel):
     ratio: float  # 0.0 to 1.0
 
 
+class SessionSettingsUpdateRequest(BaseModel):
+    starting_capital: Optional[float] = None
+    add_capital: Optional[float] = None  # Add this amount to both starting and current capital
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
+    max_positions: Optional[int] = None
+    max_per_trade_pct: Optional[float] = None
+    max_deployed_pct: Optional[float] = None
+    daily_loss_limit_pct: Optional[float] = None
+    profit_reinvest_ratio: Optional[float] = None
+    notify_claude: bool = True  # Whether to run a mini Claude call to notify about changes
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 
@@ -142,6 +155,87 @@ async def update_reinvest_ratio(session_id: int, req: ReinvestUpdateRequest):
         raise HTTPException(status_code=404, detail="Session not found")
     db.update("sessions", session_id, {"profit_reinvest_ratio": req.ratio})
     return {"session_id": session_id, "profit_reinvest_ratio": req.ratio}
+
+
+@router.put("/sessions/{session_id}/settings")
+async def update_session_settings(session_id: int, req: SessionSettingsUpdateRequest):
+    """Update risk settings and capital for a running session.
+
+    Supports partial updates — only non-None fields are applied.
+    If notify_claude is True (default), a background mini-cycle notifies Claude
+    about the changes so it can update its memory and trade theses.
+    """
+    from aaitrade import db
+    from aaitrade.server import get_server
+
+    # ── Validate session exists and is in a modifiable state ──
+    session = db.query_one(
+        "SELECT id, status FROM sessions WHERE id = ?", (session_id,)
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] not in ("active", "paused", "closing"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session is '{session['status']}' — can only update active/paused/closing sessions",
+        )
+
+    # ── Validate individual field values ──
+    if req.stop_loss_pct is not None and req.stop_loss_pct <= 0:
+        raise HTTPException(status_code=400, detail="stop_loss_pct must be positive")
+    if req.take_profit_pct is not None and req.take_profit_pct <= 0:
+        raise HTTPException(status_code=400, detail="take_profit_pct must be positive")
+    if req.max_positions is not None and req.max_positions < 1:
+        raise HTTPException(status_code=400, detail="max_positions must be at least 1")
+    if req.max_per_trade_pct is not None and not (0 < req.max_per_trade_pct <= 100):
+        raise HTTPException(status_code=400, detail="max_per_trade_pct must be between 0 and 100")
+    if req.max_deployed_pct is not None and not (0 < req.max_deployed_pct <= 100):
+        raise HTTPException(status_code=400, detail="max_deployed_pct must be between 0 and 100")
+    if req.daily_loss_limit_pct is not None and req.daily_loss_limit_pct <= 0:
+        raise HTTPException(status_code=400, detail="daily_loss_limit_pct must be positive")
+    if req.profit_reinvest_ratio is not None and not (0.0 <= req.profit_reinvest_ratio <= 1.0):
+        raise HTTPException(status_code=400, detail="profit_reinvest_ratio must be between 0.0 and 1.0")
+    if req.starting_capital is not None and req.starting_capital <= 0:
+        raise HTTPException(status_code=400, detail="starting_capital must be positive")
+    if req.add_capital is not None and req.add_capital == 0:
+        raise HTTPException(status_code=400, detail="add_capital must be non-zero")
+
+    # ── Build changes dict from non-None fields ──
+    changes = {}
+    field_names = [
+        "starting_capital", "add_capital", "stop_loss_pct", "take_profit_pct",
+        "max_positions", "max_per_trade_pct", "max_deployed_pct",
+        "daily_loss_limit_pct", "profit_reinvest_ratio",
+    ]
+    for field_name in field_names:
+        value = getattr(req, field_name)
+        if value is not None:
+            changes[field_name] = value
+
+    if not changes:
+        raise HTTPException(status_code=400, detail="No settings provided to update")
+
+    # ── Apply changes via server ──
+    server = get_server()
+    result = server.update_session_settings(session_id, changes)
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # ── Optionally notify Claude in a background thread ──
+    if req.notify_claude:
+        server.notify_claude_settings_change(
+            session_id,
+            result["old_settings"],
+            result["new_settings"],
+        )
+
+    return {
+        "session_id": session_id,
+        "old_settings": result["old_settings"],
+        "new_settings": result["new_settings"],
+        "claude_notified": req.notify_claude,
+    }
 
 
 @router.post("/token")

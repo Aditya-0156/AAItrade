@@ -300,6 +300,19 @@ class TradingServer:
         if "profit_reinvest_ratio" in session and session["profit_reinvest_ratio"] is not None:
             config.profit_reinvest_ratio = session["profit_reinvest_ratio"]
 
+        # Restore risk settings from DB (may have been changed mid-session)
+        if session.get("stop_loss_pct") is not None:
+            config.risk_rules = RiskRules(
+                stop_loss=session["stop_loss_pct"],
+                take_profit=session["take_profit_pct"],
+                max_positions=session["max_positions"],
+                max_per_trade=session["max_per_trade_pct"],
+                max_deployed=session["max_deployed_pct"],
+                daily_loss_limit=session["daily_loss_limit_pct"],
+                session_stop_loss=config.risk_rules.session_stop_loss,
+                human_alert_threshold=config.risk_rules.human_alert_threshold,
+            )
+
         manager = SessionManager(config, self._keys, name=session["name"])
         manager.session_id = session_id
         manager._recovered = True
@@ -420,6 +433,284 @@ class TradingServer:
                 return {"status": "ok", "message": "Token saved to .env, will apply on next session start"}
         except Exception as e:
             return {"status": "error", "message": f"Token saved to .env but live update failed: {e}"}
+
+    def update_session_settings(self, session_id: int, changes: dict) -> dict:
+        """Update session risk settings in DB and in-memory config.
+
+        Args:
+            session_id: The session to update.
+            changes: Dict of setting names to new values. Supports:
+                stop_loss_pct, take_profit_pct, max_positions, max_per_trade_pct,
+                max_deployed_pct, daily_loss_limit_pct, profit_reinvest_ratio,
+                starting_capital, add_capital (special: adds to both starting + current).
+
+        Returns:
+            Dict with old and new settings.
+        """
+        self._ensure_initialized()
+
+        session = db.query_one(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        )
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+        if session["status"] not in ("active", "paused", "closing"):
+            return {"error": f"Session is {session['status']}, cannot update settings"}
+
+        # Snapshot old settings
+        old_settings = {
+            "starting_capital": session["starting_capital"],
+            "current_capital": session["current_capital"],
+            "stop_loss_pct": session["stop_loss_pct"],
+            "take_profit_pct": session["take_profit_pct"],
+            "max_positions": session["max_positions"],
+            "max_per_trade_pct": session["max_per_trade_pct"],
+            "max_deployed_pct": session["max_deployed_pct"],
+            "daily_loss_limit_pct": session["daily_loss_limit_pct"],
+            "profit_reinvest_ratio": session["profit_reinvest_ratio"],
+        }
+
+        # Build DB update dict
+        db_updates = {}
+
+        # Handle add_capital specially: add to both starting and current
+        add_capital = changes.pop("add_capital", None)
+        if add_capital is not None and add_capital != 0:
+            db_updates["starting_capital"] = session["starting_capital"] + add_capital
+            db_updates["current_capital"] = session["current_capital"] + add_capital
+
+        # Map remaining changes directly to DB columns
+        direct_fields = {
+            "stop_loss_pct", "take_profit_pct", "max_positions",
+            "max_per_trade_pct", "max_deployed_pct", "daily_loss_limit_pct",
+            "profit_reinvest_ratio", "starting_capital",
+        }
+        for field_name, value in changes.items():
+            if field_name in direct_fields:
+                db_updates[field_name] = value
+
+        if not db_updates:
+            return {"error": "No valid settings to update"}
+
+        # Apply DB updates
+        db.update("sessions", session_id, db_updates)
+
+        # Read back the new session state
+        new_session = db.query_one(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        )
+        new_settings = {
+            "starting_capital": new_session["starting_capital"],
+            "current_capital": new_session["current_capital"],
+            "stop_loss_pct": new_session["stop_loss_pct"],
+            "take_profit_pct": new_session["take_profit_pct"],
+            "max_positions": new_session["max_positions"],
+            "max_per_trade_pct": new_session["max_per_trade_pct"],
+            "max_deployed_pct": new_session["max_deployed_pct"],
+            "daily_loss_limit_pct": new_session["daily_loss_limit_pct"],
+            "profit_reinvest_ratio": new_session["profit_reinvest_ratio"],
+        }
+
+        # Update in-memory config if session is running
+        with self._lock:
+            st = self._sessions.get(session_id)
+            if st:
+                manager = st.manager
+                config = manager.config
+
+                # Rebuild RiskRules (frozen dataclass — must create new instance)
+                new_rules = RiskRules(
+                    stop_loss=new_settings["stop_loss_pct"],
+                    take_profit=new_settings["take_profit_pct"],
+                    max_positions=new_settings["max_positions"],
+                    max_per_trade=new_settings["max_per_trade_pct"],
+                    max_deployed=new_settings["max_deployed_pct"],
+                    daily_loss_limit=new_settings["daily_loss_limit_pct"],
+                    session_stop_loss=config.risk_rules.session_stop_loss,
+                    human_alert_threshold=config.risk_rules.human_alert_threshold,
+                )
+                config.risk_rules = new_rules
+                config.starting_capital = new_settings["starting_capital"]
+                config.profit_reinvest_ratio = new_settings["profit_reinvest_ratio"]
+
+                # Executor caches self.rules at init — update it too
+                if hasattr(manager, "executor"):
+                    manager.executor.rules = new_rules
+
+                logger.info(f"Session {session_id} in-memory config updated")
+
+        logger.info(f"Session {session_id} settings updated: {db_updates}")
+        return {"old_settings": old_settings, "new_settings": new_settings}
+
+    def notify_claude_settings_change(
+        self, session_id: int, old_settings: dict, new_settings: dict
+    ):
+        """Run a mini Claude call to notify the LLM about settings changes.
+
+        This runs in a background thread so it doesn't block the API response.
+        Claude gets a limited tool set (read-only portfolio + memory tools)
+        and cannot BUY or SELL during this notification cycle.
+        """
+        with self._lock:
+            st = self._sessions.get(session_id)
+
+        if not st:
+            logger.warning(
+                f"Cannot notify Claude for session {session_id}: "
+                "session not running in-memory"
+            )
+            return
+
+        def _run_notification():
+            try:
+                manager = st.manager
+                claude = manager.claude
+
+                # Build human-readable diff of changes
+                change_lines = []
+                labels = {
+                    "stop_loss_pct": ("Stop Loss", "%"),
+                    "take_profit_pct": ("Take Profit", "%"),
+                    "max_positions": ("Max Positions", ""),
+                    "max_per_trade_pct": ("Max Per Trade", "%"),
+                    "max_deployed_pct": ("Max Deployed Capital", "%"),
+                    "daily_loss_limit_pct": ("Daily Loss Limit", "%"),
+                    "profit_reinvest_ratio": ("Profit Reinvest Ratio", ""),
+                    "starting_capital": ("Starting Capital", ""),
+                    "current_capital": ("Current Capital", ""),
+                }
+                for key in labels:
+                    old_val = old_settings.get(key)
+                    new_val = new_settings.get(key)
+                    if old_val != new_val:
+                        label, suffix = labels[key]
+                        if "capital" in key.lower():
+                            change_lines.append(
+                                f"- {label}: ₹{old_val:,.2f} → ₹{new_val:,.2f}"
+                            )
+                        elif suffix == "%":
+                            change_lines.append(
+                                f"- {label}: {old_val}{suffix} → {new_val}{suffix}"
+                            )
+                        else:
+                            change_lines.append(
+                                f"- {label}: {old_val} → {new_val}"
+                            )
+
+                if not change_lines:
+                    logger.info("No actual setting changes to notify Claude about")
+                    return
+
+                changes_text = "\n".join(change_lines)
+
+                notification_prompt = (
+                    "SETTINGS CHANGE NOTIFICATION\n\n"
+                    "The user has updated session settings. Here are the changes:\n"
+                    f"{changes_text}\n\n"
+                    "Your existing positions and their current stop/take-profit "
+                    "PRICES in the portfolio are unchanged.\n"
+                    "You may now:\n"
+                    "1. Review your open positions and decide if stop/take-profit "
+                    "PRICES should be adjusted (note in your thesis updates)\n"
+                    "2. Update your session memory to reflect the new risk parameters\n"
+                    "3. Update any trade theses if needed\n\n"
+                    "You are NOT allowed to BUY or SELL in this notification cycle. "
+                    "Only review and update your notes.\n\n"
+                    "When done, respond with a brief JSON confirmation:\n"
+                    '{"action": "HOLD", "symbol": null, "quantity": null, '
+                    '"stop_loss_price": null, "take_profit_price": null, '
+                    '"reason": "Settings change acknowledged — [your summary]", '
+                    '"confidence": "high", "flags": []}'
+                )
+
+                system_prompt = (
+                    "You are AAItrade's trading AI. The user has changed session "
+                    "risk settings mid-session. Review the changes and update your "
+                    "session memory and trade theses as needed. You CANNOT place "
+                    "any BUY or SELL orders in this cycle — only review, reflect, "
+                    "and update your notes. Use the tools provided to read your "
+                    "current state and make updates."
+                )
+
+                # Only allow read/update tools — no trading actions
+                allowed_tools = [
+                    "get_portfolio",
+                    "get_session_memory",
+                    "update_session_memory",
+                    "get_open_positions_with_rationale",
+                    "update_thesis",
+                ]
+
+                from aaitrade.tools import get_tools_for_api, call_tool
+
+                tools = get_tools_for_api(only=allowed_tools)
+                messages = [{"role": "user", "content": notification_prompt}]
+
+                # Run a mini tool-use loop (max 10 rounds — this is lightweight)
+                for _round in range(10):
+                    try:
+                        response = claude.client.messages.create(
+                            model=claude.model,
+                            max_tokens=1024,
+                            system=system_prompt,
+                            tools=tools,
+                            messages=messages,
+                        )
+                    except Exception as e:
+                        logger.error(f"Settings notification Claude call failed: {e}")
+                        return
+
+                    if response.stop_reason == "tool_use":
+                        tool_results = []
+                        for block in response.content:
+                            if block.type == "tool_use":
+                                logger.info(
+                                    f"Settings notification | Tool: {block.name}"
+                                    f"({block.input})"
+                                )
+                                result = call_tool(block.name, block.input)
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": json.dumps(result),
+                                })
+                        messages.append({"role": "assistant", "content": response.content})
+                        messages.append({"role": "user", "content": tool_results})
+
+                    elif response.stop_reason == "end_turn":
+                        # Extract text response for logging
+                        text = ""
+                        for block in response.content:
+                            if hasattr(block, "text"):
+                                text += block.text
+                        logger.info(
+                            f"Settings notification complete for session "
+                            f"{session_id}: {text[:200]}"
+                        )
+                        return
+                    else:
+                        logger.warning(
+                            f"Settings notification unexpected stop: "
+                            f"{response.stop_reason}"
+                        )
+                        return
+
+                logger.warning("Settings notification exhausted tool rounds")
+
+            except Exception as e:
+                logger.error(
+                    f"Settings notification failed for session {session_id}: {e}",
+                    exc_info=True,
+                )
+
+        # Run in background thread
+        thread = threading.Thread(
+            target=_run_notification,
+            name=f"settings-notify-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Settings notification thread started for session {session_id}")
 
     def get_running_sessions(self) -> list[int]:
         """Return IDs of sessions with active threads."""
