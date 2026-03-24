@@ -325,17 +325,18 @@ class TradingServer:
         manager.session_id = session_id
         manager._recovered = True
 
-        # Try to init clients; if Kite token is bad, log warning and skip recovery
-        # (user will need to update token in dashboard before session can start)
+        # Try to init clients; if Kite token is bad, start thread anyway —
+        # it will wait for market hours and by then the user should have updated the token.
+        # update_kite_token() will push the new token live to the running session.
         try:
             manager._init_clients()
         except RuntimeError as e:
             if "Kite Connect" in str(e):
                 logger.warning(
-                    f"Session {session_id} ({session['name']}) could not be recovered: {e}. "
-                    "Update the Kite token in the dashboard and restart manually."
+                    f"Session {session_id} ({session['name']}) starting with invalid Kite token: {e}. "
+                    "Update the token in the dashboard before market open."
                 )
-                return
+                # Don't return — still start the thread. Token will be injected via update_kite_token().
             else:
                 raise
 
@@ -432,15 +433,43 @@ class TradingServer:
 
         # Update live Kite client
         try:
-            from aaitrade.tools.market import _kite, set_kite_client
-            if _kite is not None:
-                _kite.set_access_token(token)
-                set_kite_client(_kite)
-                return {"status": "ok", "message": "Token updated, applied live, and persisted to .env"}
-            else:
-                return {"status": "ok", "message": "Token saved to .env, will apply on next session start"}
+            from kiteconnect import KiteConnect
+            from aaitrade.tools.market import set_kite_client
+            kite = KiteConnect(api_key="9dz93b78apapfn1l")
+            kite.set_access_token(token)
+            set_kite_client(kite)
         except Exception as e:
             return {"status": "error", "message": f"Token saved to .env but live update failed: {e}"}
+
+        # Push token into all running session managers so they can trade immediately
+        injected = []
+        with self._lock:
+            for sid, st in self._sessions.items():
+                try:
+                    from aaitrade.tools.market import _kite
+                    st.manager.kite = _kite
+                    if hasattr(st.manager, 'executor') and st.manager.executor:
+                        from aaitrade.executor import set_kite_client as exec_set
+                        exec_set(_kite)
+                    injected.append(sid)
+                except Exception:
+                    pass
+
+        # Also recover any live sessions that couldn't start due to bad token
+        live_active = db.query(
+            "SELECT id FROM sessions WHERE status IN ('active', 'paused', 'closing') AND execution_mode = 'live'",
+        )
+        recovered = []
+        with self._lock:
+            for row in live_active:
+                if row["id"] not in self._sessions:
+                    self._recover_session(row["id"])
+                    recovered.append(row["id"])
+
+        msg = "Token updated, applied live, and persisted to .env"
+        if recovered:
+            msg += f". Recovered sessions: {recovered}"
+        return {"status": "ok", "message": msg}
 
     def update_session_settings(self, session_id: int, changes: dict) -> dict:
         """Update session risk settings in DB and in-memory config.
