@@ -485,3 +485,57 @@ def get_market_snapshot() -> dict:
     except Exception as e:
         logger.error(f"get_market_snapshot failed: {e}")
         return {"error": str(e)}
+
+
+@register_tool(
+    name="get_global_context",
+    description=(
+        "Get the global macro backdrop: overnight US markets (S&P 500, NASDAQ, Dow), "
+        "Asian markets (Nikkei, Hang Seng, Shanghai), commodities (Brent crude, gold), "
+        "USD/INR rate, and India VIX. Call this at the start of Cycle 1 to understand "
+        "global risk sentiment before making any decisions. Also useful when Indian "
+        "markets are moving unusually — check this to see if the cause is global."
+    ),
+    parameters={"properties": {}, "required": []},
+)
+def get_global_context() -> dict:
+    """Fetch global indices, commodities, and currency via yfinance."""
+    try:
+        import yfinance as yf
+
+        tickers = {
+            "S&P 500":     "^GSPC",
+            "NASDAQ":      "^IXIC",
+            "Dow Jones":   "^DJI",
+            "Nikkei 225":  "^N225",
+            "Hang Seng":   "^HSI",
+            "Shanghai":    "000001.SS",
+            "Brent Crude": "BZ=F",
+            "Gold":        "GC=F",
+            "USD/INR":     "USDINR=X",
+            "India VIX":   "^INDIAVIX",
+        }
+
+        result = {}
+        for name, ticker in tickers.items():
+            try:
+                data = yf.Ticker(ticker).fast_info
+                price = getattr(data, "last_price", None) or getattr(data, "regularMarketPrice", None)
+                prev_close = getattr(data, "previous_close", None)
+                if price and prev_close and prev_close > 0:
+                    change_pct = ((price - prev_close) / prev_close) * 100
+                    result[name] = {
+                        "price": round(price, 2),
+                        "change_pct": round(change_pct, 2),
+                    }
+                elif price:
+                    result[name] = {"price": round(price, 2), "change_pct": None}
+            except Exception:
+                result[name] = {"error": "unavailable"}
+
+        result["timestamp"] = datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")
+        return result
+
+    except Exception as e:
+        logger.error(f"get_global_context failed: {e}")
+        return {"error": str(e)}

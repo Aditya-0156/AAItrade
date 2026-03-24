@@ -239,20 +239,32 @@ def get_macro_news() -> dict:
         }
 
     try:
-        result = _newsapi.get_top_headlines(
-                category="business",
-                language="en",
-                page_size=10,
-            )
-        articles = result.get("articles", [])
-        summary = _summarize_articles(
-            articles,
-            context="Focus on: geopolitics, central bank policy, tariffs, commodities, "
-                    "and events that could impact Indian stock markets.",
-        )
-        _write_cache("macro", "macro", summary, hours=12)
+        # Fetch business headlines
+        business = _newsapi.get_top_headlines(category="business", language="en", page_size=10)
+        business_articles = business.get("articles", [])
 
-        return {"summary": summary, "articles_found": len(articles)}
+        # Also fetch general/world headlines to catch wars, geopolitics, sanctions
+        general = _newsapi.get_top_headlines(category="general", language="en", page_size=10)
+        general_articles = general.get("articles", [])
+
+        # India-specific headlines
+        india = _newsapi.get_top_headlines(country="in", language="en", page_size=10)
+        india_articles = india.get("articles", [])
+
+        all_articles = business_articles + general_articles + india_articles
+        summary = _summarize_articles(
+            all_articles,
+            context=(
+                "Focus on events that could move Indian stock markets: "
+                "geopolitics (wars, sanctions, trade disputes), central bank policy, "
+                "tariffs, commodity prices (oil/gold), US/China/India economic data, "
+                "and India-specific news (RBI, rupee, FII flows, government policy). "
+                "Lead with anything that represents a major risk-on or risk-off shift."
+            ),
+        )
+        _write_cache("macro", "macro", summary, hours=6)
+
+        return {"summary": summary, "articles_found": len(all_articles)}
     except Exception as e:
         logger.error(f"get_macro_news failed: {e}")
         return {"summary": f"Macro news fetch failed: {e}", "source": "error"}

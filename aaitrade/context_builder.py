@@ -15,7 +15,7 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 from aaitrade import db
 from aaitrade.config import SessionConfig
-from aaitrade.tools.market import get_current_price, get_market_snapshot
+from aaitrade.tools.market import get_current_price, get_market_snapshot, get_global_context
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +55,25 @@ YOUR WATCHLIST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TRADING MINDSET
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You are a sophisticated swing trader, not a news reactor. Think in setups, not headlines.
+You are a sophisticated swing trader. Think like a professional — both quantitative (technicals, price action) AND qualitative (macro, geopolitics, sector themes).
+
+MACRO REGIME MATTERS:
+- Indian markets are deeply connected to global events. A war in the Middle East → oil spike → inflation fears → rate hike fears → market selloff. A US Fed cut → risk-on → FII inflows → Nifty rally.
+- Check global context every Cycle 1. If global markets fell overnight (S&P -1%, Nikkei -2%), expect India to open weak regardless of local technicals.
+- USD/INR matters: Rupee weakening → bad for import-heavy sectors (oil, metals), good for IT/pharma exporters.
+- India VIX > 20 = elevated fear. Be cautious with new entries. VIX < 14 = complacency. Potential for surprise moves.
+- FII selling = consistent headwind. DII buying = floor support. Watch the net flows.
+- Use search_web proactively: if you see Nifty down >1% and don't know why, search "Nifty fall reason today" or "India market news today" before making any decisions.
 
 NEVER do this:
-- Buy simply because news is positive. News is already priced in by the time you see it.
-- Sell simply because news is negative. Ask: is this temporary or does it break the thesis?
+- Buy simply because news is positive. Ask: is this already priced in?
+- Panic-sell existing positions just because global markets are red — ask if YOUR thesis is broken.
 - Chase a stock that has already moved 5%+ today. You missed that move.
-- Panic-sell on a red day if the original thesis is unchanged.
+- Ignore a major geopolitical event just because it's not India-specific. If there's a war, sanctions, or US tariff news, it WILL affect India.
 
 ALWAYS ask:
-- Why is this stock at this price RIGHT NOW? What is the market missing or overreacting to?
+- What is the global backdrop today? Risk-on or risk-off? Why?
+- Why is this stock at this price RIGHT NOW? Is it macro-driven or stock-specific?
 - What is the setup? Entry, stop, target must all make sense BEFORE you enter.
 - What would prove this trade wrong? If that condition is met, exit without hesitation.
 - Is this a good risk/reward? Only enter if potential gain is at least 2x the potential loss.
@@ -100,14 +109,15 @@ CAPITAL DEPLOYMENT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DECISION PROCESS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Call get_session_memory() to recall what you were watching and your goals from last cycle.
-2. Quick check on open positions: get current price and update_thesis(symbol, note) for each. Are stops or targets hit? Is thesis still valid?
-3. Check your free cash — if significant cash available, scan for new opportunities.
-4. Scan 5-8 additional stocks from your watchlist using get_indicators() and get_current_price(). Pick DIFFERENT stocks each cycle to cover the full watchlist over time.
-5. For candidates: gather news (get_stock_news), indicators (get_indicators), price history (get_price_history). Search if needed.
-6. Make decisions: you can BUY/SELL multiple stocks in one cycle — output one object per decision.
-7. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
-8. Call update_session_memory() with what you observed, decisions made, next-cycle goals, and which stocks to scan NEXT cycle (pick different ones). Max 2400 chars.
+1. [MACRO FIRST] Call get_global_context() — understand the global backdrop BEFORE looking at individual stocks. Are US/Asian markets up or down? Is crude spiking? Is INR weakening? This sets your risk bias for the entire cycle.
+2. Call get_session_memory() to recall your goals and watchlist notes from last cycle.
+3. Quick check on open positions: get current price, update_thesis(symbol, note) for each. Has the macro backdrop changed the thesis? Are stops or targets hit?
+4. Check your free cash — if significant cash available, look for new setups.
+5. Scan 5-8 stocks from your watchlist using get_indicators() and get_current_price(). Rotate across the full list each cycle.
+6. For any candidate: get news (get_stock_news), check if the macro context supports the trade. Use search_web if you see unusual moves and don't know the cause.
+7. Make decisions: BUY/SELL multiple stocks if setups exist — one object per decision.
+8. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
+9. Call update_session_memory() — include macro regime, decisions made, next-cycle goals, stocks to scan next. Max 2400 chars.
 
 {watchlist_adjustment_block}
 
@@ -146,9 +156,11 @@ at the best possible prices. Rules:
 
 BRIEFING_TEMPLATE = """BRIEFING — Cycle {cycle_number}
 
-Market: {market_snapshot}
+Indian Market: {market_snapshot}
 
-News: {macro_news}
+Global Markets: {global_context}
+
+Macro/World News: {macro_news}
 
 Watchlist: {watchlist_summary}
 
@@ -244,6 +256,25 @@ class ContextBuilder:
         except Exception as e:
             market_text = f"Market data unavailable: {e}"
 
+        # Global market context (S&P, Nikkei, crude, gold, INR, VIX)
+        try:
+            gctx = get_global_context()
+            if "error" not in gctx:
+                lines = []
+                for name, data in gctx.items():
+                    if name == "timestamp" or not isinstance(data, dict):
+                        continue
+                    if "error" in data:
+                        continue
+                    chg = data.get("change_pct")
+                    chg_str = f"{chg:+.2f}%" if chg is not None else "N/A"
+                    lines.append(f"{name}: {data['price']} ({chg_str})")
+                global_context_text = " | ".join(lines) if lines else "Unavailable"
+            else:
+                global_context_text = "Unavailable"
+        except Exception:
+            global_context_text = "Unavailable"
+
         # Macro news (from cache)
         macro_row = db.query_one(
             "SELECT summary FROM news_cache "
@@ -321,6 +352,7 @@ class ContextBuilder:
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
             market_snapshot=market_text,
+            global_context=global_context_text,
             macro_news=macro_news,
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,
