@@ -128,7 +128,6 @@ class TradingServer:
                 max_deployed=custom_max_deployed if custom_max_deployed is not None else base_rules.max_deployed,
                 daily_loss_limit=custom_daily_loss_limit if custom_daily_loss_limit is not None else base_rules.daily_loss_limit,
                 session_stop_loss=base_rules.session_stop_loss,
-                human_alert_threshold=base_rules.human_alert_threshold,
             )
             config.risk_rules = custom_rules
 
@@ -318,7 +317,6 @@ class TradingServer:
                 max_deployed=session["max_deployed_pct"],
                 daily_loss_limit=session["daily_loss_limit_pct"],
                 session_stop_loss=config.risk_rules.session_stop_loss,
-                human_alert_threshold=config.risk_rules.human_alert_threshold,
             )
 
         manager = SessionManager(config, self._keys, name=session["name"])
@@ -431,15 +429,17 @@ class TradingServer:
         except Exception as e:
             logger.error(f"Failed to persist token to .env: {e}")
 
-        # Update live Kite client
+        # Update live Kite client and validate token via profile call
         try:
             from kiteconnect import KiteConnect
             from aaitrade.tools.market import set_kite_client
             kite = KiteConnect(api_key="9dz93b78apapfn1l")
             kite.set_access_token(token)
+            profile = kite.profile()
+            logger.info(f"Kite token validated — logged in as {profile['user_name']} ({profile['email']})")
             set_kite_client(kite)
         except Exception as e:
-            return {"status": "error", "message": f"Token saved to .env but live update failed: {e}"}
+            return {"status": "error", "message": f"Token invalid or Kite API error: {e}"}
 
         # Push token into all running session managers so they can trade immediately
         injected = []
@@ -564,7 +564,6 @@ class TradingServer:
                     max_deployed=new_settings["max_deployed_pct"],
                     daily_loss_limit=new_settings["daily_loss_limit_pct"],
                     session_stop_loss=config.risk_rules.session_stop_loss,
-                    human_alert_threshold=config.risk_rules.human_alert_threshold,
                 )
                 config.risk_rules = new_rules
                 config.starting_capital = new_settings["starting_capital"]

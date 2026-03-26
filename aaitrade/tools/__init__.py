@@ -130,6 +130,7 @@ _TOOL_MODULES = [
     "aaitrade.tools.journal",
     "aaitrade.tools.watchlist_tools",
     "aaitrade.tools.session_memory",
+    "aaitrade.tools.trading",
 ]
 
 

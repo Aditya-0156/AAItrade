@@ -28,48 +28,6 @@ def _require_session():
         raise RuntimeError("Session not initialized.")
 
 
-@register_tool(
-    name="write_trade_rationale",
-    description=(
-        "Record the rationale for a BUY decision in the trade journal. "
-        "Must be called every time you open a new position. Records why you "
-        "bought, what news supported it, your thesis, and target/stop prices."
-    ),
-    parameters={
-        "properties": {
-            "symbol": {
-                "type": "string",
-                "description": "NSE symbol being bought",
-            },
-            "entry_price": {
-                "type": "number",
-                "description": "The price at which the position is being opened",
-            },
-            "reason": {
-                "type": "string",
-                "description": "2-4 sentences explaining why you are buying",
-            },
-            "news_cited": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "List of news headlines that support this decision",
-            },
-            "thesis": {
-                "type": "string",
-                "description": "Your key thesis — what needs to happen for this trade to work",
-            },
-            "target_price": {
-                "type": "number",
-                "description": "Target price for take-profit",
-            },
-            "stop_price": {
-                "type": "number",
-                "description": "Stop-loss price",
-            },
-        },
-        "required": ["symbol", "entry_price", "reason", "thesis", "target_price", "stop_price"],
-    },
-)
 def write_trade_rationale(
     symbol: str,
     entry_price: float,

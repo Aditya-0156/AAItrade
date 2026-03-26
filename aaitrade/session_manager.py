@@ -258,6 +258,8 @@ class SessionManager:
             haiku_client = anthropic.Anthropic(api_key=self.keys.anthropic)
             from aaitrade.tools.news import set_anthropic_client
             set_anthropic_client(haiku_client)
+            from aaitrade.tools.session_memory import set_anthropic_client as set_memory_anthropic_client
+            set_memory_anthropic_client(haiku_client)
 
         # HuggingFace summarizer for large tool outputs
         from aaitrade.summarizer import init_summarizer
@@ -572,6 +574,10 @@ class SessionManager:
         system_prompt = self.context.build_system_prompt(closing_mode=closing_mode)
         briefing = self.context.build_briefing(self.cycle_count)
 
+        # Inject executor into execute_trade tool so it can run trades during Claude's reasoning
+        from aaitrade.tools.trading import set_trading_context
+        set_trading_context(self.executor, self.session_id, self.cycle_count)
+
         # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
         decisions = self.claude.make_decision(
             system_prompt=system_prompt,
@@ -582,48 +588,26 @@ class SessionManager:
 
         logger.info(f"Received {len(decisions)} decision(s) from Claude")
 
-        # Execute each decision in sequence
+        # BUY/SELL trades are executed by Claude via the execute_trade tool during its
+        # reasoning loop. The final JSON only carries HOLD decisions and session flags.
         bot = get_bot()
         for decision in decisions:
-            # In closing mode, reject BUY decisions at the executor level
-            if closing_mode and decision.get("action", "").upper() == "BUY":
-                logger.info(f"Closing mode: rejecting BUY {decision.get('symbol', '')}")
+            action = decision.get("action", "").upper()
+
+            # Skip BUY/SELL — already executed via execute_trade tool call
+            if action in ("BUY", "SELL"):
+                logger.debug(f"Skipping {action} {decision.get('symbol')} from final JSON — handled by execute_trade tool")
                 continue
 
-            logger.info(
-                f"Decision: {decision.get('action', 'N/A')} "
-                f"{decision.get('symbol', '')} "
-                f"[{decision.get('confidence', '')}]"
-            )
-            logger.info(f"Reason: {decision.get('reason', 'N/A')}")
+            logger.info(f"Decision: {action} [{decision.get('confidence', '')}] — {decision.get('reason', 'N/A')[:80]}")
 
-            # Check for HALT_SESSION flag — stop processing further decisions
+            # Check for HALT_SESSION flag
             if "HALT_SESSION" in decision.get("flags", []):
                 logger.warning("HALT_SESSION flag received — halting session")
                 self.executor._halt_session(decision.get("reason", "Claude requested halt"))
                 if bot:
                     bot.send_halt_alert(decision.get("reason", "Claude requested halt"), self.session_id)
                 return
-
-            result = self.executor.execute(decision)
-            logger.info(f"Result: {result.get('status', 'unknown')}")
-
-            if bot and result.get("status") == "executed":
-                bot.send_trade_alert(
-                    action=decision.get("action", ""),
-                    symbol=decision.get("symbol", ""),
-                    quantity=result.get("quantity", 0),
-                    price=result.get("price", 0),
-                    reason=decision.get("reason", ""),
-                    pnl=result.get("pnl"),
-                    mode=result.get("mode", "paper"),
-                )
-
-            if result.get("status") == "halted":
-                logger.info("Session halted by executor.")
-                if bot:
-                    bot.send_halt_alert(result.get("reason", "Unknown"), self.session_id)
-                return  # Stop processing further decisions if session halted
 
     def _end_of_day(self):
         """Run end-of-day processing — guarded to fire at most once per calendar day."""

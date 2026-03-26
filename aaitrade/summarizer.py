@@ -2,6 +2,7 @@
 
 When tool results (news, web search) exceed a threshold, this module
 summarizes them before returning to Claude, saving context window tokens.
+Session memory compression is handled separately by Claude Haiku.
 """
 
 from __future__ import annotations

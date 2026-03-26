@@ -317,37 +317,19 @@ def get_price_history(symbol: str, days: int = 30) -> dict:
         return {"error": str(e), "symbol": symbol}
 
 
-@register_tool(
-    name="get_indicators",
-    description=(
-        "Get pre-computed technical indicators for an NSE stock: RSI (14), "
-        "20-day MA, 50-day MA, VWAP approximation, and volume ratio vs "
-        "20-day average. Indicators are computed from recent price history."
-    ),
-    parameters={
-        "properties": {
-            "symbol": {
-                "type": "string",
-                "description": "NSE trading symbol (e.g. 'RELIANCE')",
-            },
-        },
-        "required": ["symbol"],
-    },
-)
-def get_indicators(symbol: str) -> dict:
+def _compute_indicators_one(symbol: str) -> dict:
+    """Compute indicators for a single symbol. Returns a dict or error dict."""
     try:
         history = get_price_history(symbol, days=60)
         if "error" in history:
-            return history
+            return {"symbol": symbol, "error": history["error"]}
 
         candles = history["candles"]
         if len(candles) < 20:
-            return {"error": f"Insufficient data for {symbol} (need 20+ days)", "symbol": symbol}
+            return {"symbol": symbol, "error": f"insufficient data ({len(candles)} days)"}
 
         df = pd.DataFrame(candles)
         df["close"] = pd.to_numeric(df["close"])
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
         df["volume"] = pd.to_numeric(df["volume"])
 
         # RSI 14
@@ -360,51 +342,78 @@ def get_indicators(symbol: str) -> dict:
             gain = delta.where(delta > 0, 0).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             rs = gain / loss
-            rsi_val = 100 - (100 / (1 + rs))
-            rsi = round(float(rsi_val.iloc[-1]), 1)
+            rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
 
-        # Moving averages
         ma_20 = round(float(df["close"].rolling(20).mean().iloc[-1]), 2)
         ma_50 = round(float(df["close"].rolling(50).mean().iloc[-1]), 2) if len(df) >= 50 else None
+        price = round(float(df["close"].iloc[-1]), 2)
 
-        current_price = float(df["close"].iloc[-1])
+        avg_vol = float(df["volume"].rolling(20).mean().iloc[-1])
+        vol_ratio = round(float(df["volume"].iloc[-1]) / avg_vol, 2) if avg_vol > 0 else None
 
-        # Volume ratio
-        avg_vol_20 = float(df["volume"].rolling(20).mean().iloc[-1])
-        current_vol = float(df["volume"].iloc[-1])
-        vol_ratio = round(current_vol / avg_vol_20, 2) if avg_vol_20 > 0 else None
+        if rsi is None:       rsi_sig = "?"
+        elif rsi > 70:        rsi_sig = "overbought"
+        elif rsi < 30:        rsi_sig = "oversold"
+        else:                 rsi_sig = "neutral"
 
-        rsi_signal = "neutral"
-        if rsi is not None:
-            if rsi > 70:
-                rsi_signal = "overbought"
-            elif rsi < 30:
-                rsi_signal = "oversold"
+        ma20_pos = "above" if price > ma_20 else "below"
+        ma50_pos = ("above" if price > ma_50 else "below") if ma_50 else "-"
 
-        ma_20_signal = "above" if current_price > ma_20 else "below"
-        ma_50_signal = None
-        if ma_50:
-            ma_50_signal = "above" if current_price > ma_50 else "below"
+        vol_sig = "high" if vol_ratio and vol_ratio > 1.5 else "normal" if vol_ratio and vol_ratio > 0.7 else "low"
 
         return {
-            "symbol": symbol,
-            "current_price": current_price,
-            "rsi_14": rsi,
-            "rsi_signal": rsi_signal,
-            "ma_20": ma_20,
-            "ma_20_position": ma_20_signal,
-            "ma_50": ma_50,
-            "ma_50_position": ma_50_signal,
-            "volume_ratio_20d": vol_ratio,
-            "volume_signal": (
-                "high" if vol_ratio and vol_ratio > 1.5
-                else "normal" if vol_ratio and vol_ratio > 0.7
-                else "low"
-            ),
+            "symbol": symbol, "price": price,
+            "rsi": rsi, "rsi_sig": rsi_sig,
+            "ma20": ma_20, "ma20_pos": ma20_pos,
+            "ma50": ma_50 or "-", "ma50_pos": ma50_pos,
+            "vol_ratio": vol_ratio, "vol_sig": vol_sig,
         }
     except Exception as e:
         logger.error(f"get_indicators failed for {symbol}: {e}")
-        return {"error": str(e), "symbol": symbol}
+        return {"symbol": symbol, "error": str(e)}
+
+
+@register_tool(
+    name="get_indicators",
+    description=(
+        "Get technical indicators for up to 5 NSE stocks in one call: RSI(14), "
+        "20-day MA, 50-day MA, and volume ratio vs 20-day average. "
+        "Returns a compact table — one row per symbol. "
+        "Always batch multiple symbols into a single call instead of calling one at a time."
+    ),
+    parameters={
+        "properties": {
+            "symbols": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of NSE symbols, e.g. ['RELIANCE', 'INFY', 'TCS']. Max 5.",
+            },
+        },
+        "required": ["symbols"],
+    },
+)
+def get_indicators(symbols: list) -> dict:
+    symbols = symbols[:5]
+    rows = [_compute_indicators_one(s) for s in symbols]
+
+    # Build compact pipe-table so keys are not repeated per row
+    header = "SYMBOL|PRICE|RSI|RSI_SIG|MA20|MA20_POS|MA50|MA50_POS|VOL_RATIO|VOL_SIG"
+    lines = [header]
+    errors = []
+    for r in rows:
+        if "error" in r:
+            errors.append(f"{r['symbol']}: {r['error']}")
+            continue
+        lines.append(
+            f"{r['symbol']}|{r['price']}|{r['rsi']}|{r['rsi_sig']}|"
+            f"{r['ma20']}|{r['ma20_pos']}|{r['ma50']}|{r['ma50_pos']}|"
+            f"{r['vol_ratio']}|{r['vol_sig']}"
+        )
+
+    result: dict = {"table": "\n".join(lines)}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 @register_tool(

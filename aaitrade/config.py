@@ -46,7 +46,6 @@ class RiskRules:
 
     # Session-level (universal — same for all modes)
     session_stop_loss: float = 40.0       # halt session at 40% drawdown
-    human_alert_threshold: float = 25.0   # alert if single trade > 25% capital
 
 
 RISK_PROFILES: dict[TradingMode, RiskRules] = {

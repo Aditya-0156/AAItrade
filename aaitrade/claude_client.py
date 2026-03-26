@@ -62,7 +62,7 @@ class ClaudeClient:
                     try:
                         response = self.client.messages.create(
                             model=self.model,
-                            max_tokens=2048,
+                            max_tokens=8192,
                             system=[
                                 {
                                     "type": "text",
@@ -169,12 +169,26 @@ class ClaudeClient:
                 logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
                 break
 
-        # If we exhaust tool rounds, return a HOLD
+        # Tool round limit reached — any execute_trade calls already ran and are committed
+        # to DB. Any pending retries on rejected trades will appear in next cycle's briefing.
         logger.warning(f"Cycle {cycle_number}: exhausted {self.max_tool_rounds} tool rounds")
-        return [{"action": "HOLD", "symbol": None, "quantity": None,
-                 "stop_loss_price": None, "take_profit_price": None,
-                 "reason": "Exhausted tool call budget without reaching a decision.",
-                 "confidence": "low", "flags": []}]
+        fallback = {"action": "HOLD", "symbol": None, "quantity": None,
+                    "stop_loss_price": None, "take_profit_price": None,
+                    "reason": "Tool call budget exhausted. Any trades executed this cycle via execute_trade are active. Pending retries on rejected trades will appear in next cycle briefing.",
+                    "confidence": "low", "flags": []}
+        db.insert("decisions", {
+            "session_id": session_id,
+            "cycle_number": cycle_number,
+            "action": "HOLD",
+            "symbol": None,
+            "quantity": None,
+            "reason": fallback["reason"],
+            "confidence": "low",
+            "flags": json.dumps([]),
+            "raw_json": json.dumps([fallback]),
+            "decided_at": db.now_iso(),
+        })
+        return [fallback]
 
     def _parse_decision(self, text: str) -> list[dict]:
         """Parse Claude's JSON output into a list of decision dicts."""
@@ -226,7 +240,7 @@ class ClaudeClient:
         with _claude_lock:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=4096,
                 system=system_prompt,
                 messages=[{"role": "user", "content": summary_prompt}],
             )

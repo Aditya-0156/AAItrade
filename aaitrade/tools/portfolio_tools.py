@@ -92,17 +92,23 @@ def get_cash() -> dict:
     )
     deployed = positions[0]["deployed"] if positions and positions[0]["deployed"] else 0
 
-    available = session["current_capital"] - deployed
+    # current_capital in DB is already FREE CASH (deployed amounts are deducted at BUY time).
+    # available_cash = current_capital directly; do NOT subtract deployed again.
+    available = session["current_capital"]
 
+    # total_value = free_cash + deployed_at_cost + secured_profit
     total_value = session["current_capital"] + deployed + session["secured_profit"]
     drawdown_pct = round(
         (session["starting_capital"] - total_value) / session["starting_capital"] * 100, 2
     )
+    effective_capital = available + deployed  # tradeable pot — grows with reinvested profits
+    deployed_pct = round(deployed / effective_capital * 100, 1) if effective_capital else 0
     return {
         "starting_capital": session["starting_capital"],
-        "current_capital": session["current_capital"],
+        "effective_capital": round(effective_capital, 2),  # use this as base for position sizing
         "available_cash": round(available, 2),
         "deployed_capital": round(deployed, 2),
+        "deployed_pct": deployed_pct,
         "secured_profit": session["secured_profit"],
         "total_portfolio_value": round(total_value, 2),
         "total_pnl": round(total_value - session["starting_capital"], 2),

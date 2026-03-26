@@ -101,6 +101,7 @@ class TelegramBot:
             "/pause": self._cmd_pause,
             "/resume": self._cmd_resume,
             "/token": self._cmd_token,
+            "/feed": self._cmd_feed,
             "/help": self._cmd_help,
         }
 
@@ -305,12 +306,53 @@ class TelegramBot:
             self.send(f"\u26a0\ufe0f Token saved but live update failed: {e}")
             logger.error(f"Live token update failed: {e}")
 
+    def _cmd_feed(self, args: str):
+        """Show latest N feed entries. Usage: /feed <n>"""
+        try:
+            n = int(args.strip()) if args.strip() else 10
+            n = max(1, min(n, 50))  # clamp 1-50
+        except ValueError:
+            self.send("Usage: /feed <number>  (e.g. /feed 10)")
+            return
+
+        rows = db.query(
+            "SELECT d.action, d.symbol, d.quantity, d.reason, d.decided_at, s.name "
+            "FROM decisions d "
+            "JOIN sessions s ON s.id = d.session_id "
+            "ORDER BY d.decided_at DESC LIMIT ?",
+            (n,),
+        )
+        if not rows:
+            self.send("No feed entries found.")
+            return
+
+        action_emoji = {
+            "BUY": "\u2705",
+            "SELL": "\ud83d\udcb0",
+            "HOLD": "\u23f8\ufe0f",
+            "TRADE_FAILED": "\u274c",
+        }
+        lines = [f"*Latest {n} Feed Entries*"]
+        for r in rows:
+            emoji = action_emoji.get(r["action"], "\u2022")
+            ts = r["decided_at"][11:16] if r["decided_at"] else "?"
+            sym = f" {r['symbol']}" if r["symbol"] else ""
+            qty = f" \u00d7{r['quantity']}" if r["quantity"] else ""
+            session_label = r["name"] or "?"
+            reason_short = (r["reason"] or "")[:60].replace("*", "").replace("_", "")
+            if len(r["reason"] or "") > 60:
+                reason_short += "..."
+            lines.append(f"{emoji} `{ts}` *{r['action']}*{sym}{qty} [{session_label}]\n  _{reason_short}_")
+
+        self.send("\n".join(lines))
+
     def _cmd_help(self, args: str):
         """Show available commands."""
         self.send(
             "*AAItrade Commands*\n"
             "/status - Show active sessions\n"
             "/sessions - List recent sessions\n"
+            "/feed <n> - Show latest n feed entries\n"
             "/pause <id> - Pause a session\n"
             "/resume <id> - Resume a session\n"
             "/stop <id> - Stop a session\n"

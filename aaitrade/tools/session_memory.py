@@ -3,7 +3,10 @@
 Claude reads this at the start of each cycle to recall its running context,
 and writes it at the end of each cycle to record what happened and next goals.
 
-Fixed size: 2400 characters (~600 tokens). Claude manages its own summarization.
+Size: 2880 characters (~720 tokens). If Claude writes more, Claude Haiku
+auto-compresses it — removing redundant/obsolete info while preserving all
+critical trade data (prices, stops, targets, RSI, capital). Claude never
+gets a rejection error.
 One row per session — always overwritten (not appended).
 """
 
@@ -17,8 +20,9 @@ from aaitrade import db
 logger = logging.getLogger(__name__)
 
 _session_id: int | None = None
+_anthropic_client = None
 
-MAX_MEMORY_CHARS = 2400  # ~600 tokens — enforced hard limit
+MAX_MEMORY_CHARS = 2880  # 20% more than original 2400
 
 
 def set_session_id(session_id: int):
@@ -26,9 +30,68 @@ def set_session_id(session_id: int):
     _session_id = session_id
 
 
+def set_anthropic_client(client):
+    global _anthropic_client
+    _anthropic_client = client
+
+
 def _require_session():
     if _session_id is None:
         raise RuntimeError("session_memory tools used before set_session_id() called")
+
+
+def _compress_with_haiku(content: str, max_chars: int) -> str:
+    """Use Claude Haiku to compress session memory intelligently.
+
+    Haiku understands trading context and will:
+    - Preserve ALL critical data: entry prices, stop prices, target prices,
+      RSI values, capital amounts, position sizes, settings
+    - Remove: redundant explanations, repeated thesis points, outdated
+      market observations that are no longer actionable
+    - Output dense, information-rich memory under max_chars
+    """
+    if not _anthropic_client:
+        logger.warning("Anthropic client not set for session memory compression — hard truncating")
+        return content[:max_chars]
+
+    try:
+        response = _anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=(
+                "You are a trading memory compressor. Your job is to compress session memory "
+                "for an AI stock trader while preserving all critical information.\n\n"
+                "ALWAYS KEEP (verbatim):\n"
+                "- All entry prices, stop prices, target prices\n"
+                "- All RSI values and MA values\n"
+                "- All capital figures (deployed %, free cash, ₹ amounts)\n"
+                "- All settings (stop_loss_pct, take_profit_pct, daily_loss_limit_pct)\n"
+                "- All position sizes and symbols\n"
+                "- Next-cycle goals and watchlist stocks\n\n"
+                "REMOVE OR SHORTEN:\n"
+                "- Repeated explanations of the same thesis\n"
+                "- Verbose market descriptions already captured in numbers\n"
+                "- Outdated observations (e.g. 'market was weak at 10am' with no ongoing relevance)\n"
+                "- Filler phrases and redundant qualifiers\n\n"
+                "Output ONLY the compressed memory text. No preamble. No explanation."
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Compress this trading session memory to under {max_chars} characters. "
+                    f"Current length: {len(content)} chars. Target: {max_chars} chars.\n\n"
+                    f"{content}"
+                ),
+            }],
+        )
+        compressed = response.content[0].text.strip()
+        if len(compressed) > max_chars:
+            compressed = compressed[:max_chars]
+        logger.info(f"Session memory compressed by Haiku: {len(content)} → {len(compressed)} chars")
+        return compressed
+    except Exception as e:
+        logger.warning(f"Haiku compression failed: {e} — hard truncating")
+        return content[:max_chars]
 
 
 @register_tool(
@@ -70,7 +133,8 @@ def get_session_memory() -> dict:
         "Overwrite your session memory with updated content. Call this at the END "
         "of each cycle to record: what you observed, decisions made and why, "
         "stocks you want to watch next cycle, your goals, and any patterns noticed. "
-        "Max 2400 characters — if your content is longer, summarize it first. "
+        "Max 2880 characters. If your content is longer it will be automatically "
+        "compressed by AI — no need to manually shorten it. "
         "This replaces your previous memory entirely."
     ),
     parameters={
@@ -78,9 +142,9 @@ def get_session_memory() -> dict:
             "content": {
                 "type": "string",
                 "description": (
-                    "Your updated memory. Max 2400 characters (~600 tokens). "
-                    "Suggested format: WATCHING: ..., RECENT DECISIONS: ..., "
-                    "NEXT CYCLE GOALS: ..., AVOID: ..., PATTERNS: ..."
+                    "Your updated memory. Max 2880 characters (~720 tokens). "
+                    "Suggested format: POSITIONS: ..., CAPITAL: ..., STRATEGY: ..., "
+                    "WATCHLIST: ..., NEXT CYCLE GOALS: ..., PATTERNS: ..."
                 ),
             },
         },
@@ -91,13 +155,7 @@ def update_session_memory(content: str) -> dict:
     _require_session()
 
     if len(content) > MAX_MEMORY_CHARS:
-        return {
-            "error": (
-                f"Memory too long: {len(content)} chars, limit is {MAX_MEMORY_CHARS}. "
-                f"Please summarize your content and call again."
-            ),
-            "chars_over_limit": len(content) - MAX_MEMORY_CHARS,
-        }
+        content = _compress_with_haiku(content, MAX_MEMORY_CHARS)
 
     # Get current cycle number from decisions table
     last = db.query_one(

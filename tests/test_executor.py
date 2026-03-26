@@ -167,18 +167,11 @@ class TestBuyValidations:
         # Either rejected for insufficient cash or auto-reduced below 1 share
         assert result["status"] in ("rejected",)
 
-    def test_buy_human_alert_threshold_rejected(self, in_memory_db, balanced_config, session_with_watchlist):
-        """Trade > 25% of capital triggers ALERT_USER and rejection.
-        Note: executor first reduces qty to fit max_per_trade (10%), so to
-        hit the 25% threshold we need the single-share price itself to be >25%.
-        Use a stock at ₹6000 where 1 share = ₹6000 = 30% of ₹20,000 capital.
-        But max_per_trade=10% = ₹2000, so qty gets reduced to 0 → rejected before threshold.
-        The threshold is unreachable via normal flow because max_per_trade always fires first.
-        Test that max_per_trade rejection covers the safety net.
-        """
+    def test_buy_single_share_too_expensive(self, in_memory_db, balanced_config, session_with_watchlist):
+        """If even 1 share exceeds max_per_trade, reject with clear message."""
         ex = make_executor(balanced_config, session_with_watchlist)
-        # 1 share at ₹6000 = 30% of capital. max_per_trade=10% = ₹2000.
-        # auto-adjust: ₹2000 // ₹6000 = 0 shares → rejected before threshold
+        # 1 share at ₹6000 = 30% of ₹20,000 capital. max_per_trade=20% = ₹4000.
+        # auto-adjust: ₹4000 // ₹6000 = 0 shares → rejected
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 6000)):
             result = ex.execute(buy("RELIANCE", 10))
         assert result["status"] == "rejected"

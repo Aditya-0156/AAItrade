@@ -75,6 +75,17 @@ class Executor:
         if not symbol or not quantity:
             return {"status": "rejected", "reason": "BUY missing symbol or quantity"}
 
+        # NSE does not allow fractional shares — round down to whole number
+        quantity = int(quantity)
+        if quantity <= 0:
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"Quantity must be at least 1 whole share "
+                    f"(requested {decision.get('quantity')}, rounds to {quantity})"
+                ),
+            }
+
         # ── Validation Checklist ──
 
         # 1. Is symbol on watchlist?
@@ -94,7 +105,19 @@ class Executor:
         if not session:
             return {"status": "rejected", "reason": "Session not found"}
 
-        current_capital = session["current_capital"]
+        # current_capital in DB is FREE CASH (starting capital minus all deployed amounts).
+        free_cash = session["current_capital"]
+        starting_capital = session["starting_capital"]
+
+        # Effective tradeable capital = free cash + deployed at cost.
+        # This grows as reinvested profits are added, so risk limits scale with the portfolio.
+        # (starting_capital stays fixed and is used only for drawdown calculations.)
+        deployed_row = db.query(
+            "SELECT SUM(quantity * avg_price) as total FROM portfolio WHERE session_id = ?",
+            (self.session_id,),
+        )
+        current_deployed = deployed_row[0]["total"] if deployed_row and deployed_row[0]["total"] else 0
+        effective_capital = free_cash + current_deployed  # total tradeable pot
 
         # 3. Get current price for position sizing validation
         from aaitrade.tools.market import get_current_price
@@ -105,14 +128,19 @@ class Executor:
         price = price_data["last_price"]
         trade_value = price * quantity
 
-        # 4. Check max per trade
-        max_trade_value = current_capital * (self.rules.max_per_trade / 100)
+        # 4. Check max per trade (% of effective capital) — auto-reduce to fit
+        max_trade_value = effective_capital * (self.rules.max_per_trade / 100)
         if trade_value > max_trade_value:
-            # Reduce quantity to fit within limit
             adjusted_qty = int(max_trade_value // price)
             if adjusted_qty <= 0:
-                return {"status": "rejected", "reason": f"Trade value ₹{trade_value:.2f} exceeds {self.rules.max_per_trade}% limit and cannot be reduced"}
-            logger.info(f"Reduced {symbol} quantity from {quantity} to {adjusted_qty} to fit risk limits")
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Even 1 share of {symbol} (₹{price:.2f}) exceeds "
+                        f"{self.rules.max_per_trade}% max-per-trade limit (₹{max_trade_value:.0f} of ₹{effective_capital:.0f})"
+                    ),
+                }
+            logger.info(f"Auto-reduced {symbol} qty {quantity}→{adjusted_qty} to fit {self.rules.max_per_trade}% limit")
             quantity = adjusted_qty
             trade_value = price * quantity
 
@@ -125,40 +153,36 @@ class Executor:
         if pos_count >= self.rules.max_positions:
             return {"status": "rejected", "reason": f"Already at max {self.rules.max_positions} positions"}
 
-        # 6. Check max deployed capital
-        deployed = db.query(
-            "SELECT SUM(quantity * avg_price) as total FROM portfolio WHERE session_id = ?",
-            (self.session_id,),
-        )
-        current_deployed = deployed[0]["total"] if deployed and deployed[0]["total"] else 0
-        max_deployed_value = current_capital * (self.rules.max_deployed / 100)
+        # 6. Check max deployed capital (% of effective capital)
+        max_deployed_value = effective_capital * (self.rules.max_deployed / 100)
         if current_deployed + trade_value > max_deployed_value:
-            return {"status": "rejected", "reason": f"Total deployment would exceed {self.rules.max_deployed}% limit"}
+            remaining_deploy = max(0, max_deployed_value - current_deployed)
+            max_qty_deploy = int(remaining_deploy // price)
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"Max deployed {self.rules.max_deployed}% (₹{max_deployed_value:.0f} of ₹{effective_capital:.0f}) would be exceeded. "
+                    f"Currently deployed ₹{current_deployed:.0f}. "
+                    f"Room left: ₹{remaining_deploy:.0f} = max {max_qty_deploy} shares of {symbol} at ₹{price:.2f}"
+                ),
+            }
 
-        # 7. Check available cash
-        available = current_capital - current_deployed
-        if trade_value > available:
-            return {"status": "rejected", "reason": f"Insufficient cash: need ₹{trade_value:.2f}, have ₹{available:.2f}"}
+        # 7. Check available cash (free_cash already has deployed amounts subtracted)
+        if trade_value > free_cash:
+            return {"status": "rejected", "reason": f"Insufficient cash: need ₹{trade_value:.2f}, have ₹{free_cash:.2f}"}
 
         # 8. Check daily loss limit
         if self._daily_loss_exceeded():
             return {"status": "rejected", "reason": "Daily loss limit already hit"}
 
-        # 9. Check session drawdown (based on total portfolio value, not just cash)
-        total_value = current_capital  # free cash
-        total_value += current_deployed  # + value of open positions at cost
-        drawdown = ((session["starting_capital"] - total_value) / session["starting_capital"]) * 100
+        # 9. Check session drawdown (free_cash + deployed at cost = total portfolio value)
+        total_value = free_cash + current_deployed
+        drawdown = ((starting_capital - total_value) / starting_capital) * 100
         if drawdown >= self.rules.session_stop_loss:
             self._halt_session("Session stop-loss reached")
             return {"status": "halted", "reason": f"Session stop-loss reached ({self.rules.session_stop_loss}% drawdown)"}
 
-        # 10. Check human alert threshold
-        trade_pct = (trade_value / current_capital) * 100
-        if trade_pct > self.rules.human_alert_threshold:
-            logger.critical(f"ALERT: Trade {symbol} x{quantity} = ₹{trade_value:.2f} is {trade_pct:.1f}% of capital!")
-            return {"status": "rejected", "reason": f"Trade exceeds {self.rules.human_alert_threshold}% alert threshold"}
-
-        # 11. Compute stop-loss and take-profit if Claude didn't provide them
+        # 10. Compute stop-loss and take-profit if Claude didn't provide them
         # If the rule is 0, it means "no hard limit" — leave it to Claude's discretion
         if not stop_loss_price and self.rules.stop_loss > 0:
             stop_loss_price = round(price * (1 - self.rules.stop_loss / 100), 2)
@@ -226,6 +250,20 @@ class Executor:
                 "current_capital": round(session_cap["current_capital"] - trade_value, 2),
             })
 
+        # Write trade journal only after confirmed execution — never before
+        if not existing:  # new position only; adding to existing updates thesis via update_thesis
+            from aaitrade.tools.journal import write_trade_rationale
+            from aaitrade.tools.journal import _session_id as _j_session_id
+            if _j_session_id:
+                write_trade_rationale(
+                    symbol=symbol,
+                    entry_price=price,
+                    reason=decision.get("reason", ""),
+                    thesis=decision.get("thesis", decision.get("reason", "")),
+                    target_price=take_profit or 0,
+                    stop_price=stop_loss or 0,
+                )
+
         return {
             "status": "executed",
             "mode": "paper",
@@ -292,6 +330,7 @@ class Executor:
             })
 
             # Add to portfolio (or update existing)
+            # Check BEFORE inserting so we know if this is a new position
             existing = db.query_one(
                 "SELECT id, quantity, avg_price FROM portfolio "
                 "WHERE session_id = ? AND symbol = ?",
@@ -326,6 +365,20 @@ class Executor:
                 db.update("sessions", self.session_id, {
                     "current_capital": round(session_cap["current_capital"] - trade_value, 2),
                 })
+
+            # Write trade journal only for new positions (not adds to existing)
+            if not existing:
+                from aaitrade.tools.journal import write_trade_rationale
+                from aaitrade.tools.journal import _session_id as _j_session_id
+                if _j_session_id:
+                    write_trade_rationale(
+                        symbol=symbol,
+                        entry_price=actual_price,
+                        reason=decision.get("reason", ""),
+                        thesis=decision.get("thesis", decision.get("reason", "")),
+                        target_price=take_profit or 0,
+                        stop_price=stop_loss or 0,
+                    )
 
             logger.info(f"[LIVE] BUY {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
             return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price}

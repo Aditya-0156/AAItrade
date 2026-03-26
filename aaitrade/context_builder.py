@@ -36,7 +36,7 @@ YOUR MANDATE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HARD RISK RULES (enforce always)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Max {max_per_trade}% of capital per trade
+1. Max {max_per_trade}% of effective capital per trade. Effective capital = free cash + deployed (grows with reinvested profits). Call get_cash() to get effective_capital, then: max_trade = effective_capital × {max_per_trade}% = ₹{max_trade_value:,.0f} at current capital. Calculate quantity as: floor(max_trade / price).
 2. Every BUY: stop-loss {stop_loss}% below entry, take-profit {take_profit}% above
 3. Max {max_positions} open positions
 4. Max {max_deployed}% total deployed capital
@@ -64,6 +64,15 @@ MACRO REGIME MATTERS:
 - India VIX > 20 = elevated fear. Be cautious with new entries. VIX < 14 = complacency. Potential for surprise moves.
 - FII selling = consistent headwind. DII buying = floor support. Watch the net flows.
 - Use search_web proactively: if you see Nifty down >1% and don't know why, search "Nifty fall reason today" or "India market news today" before making any decisions.
+
+EXIT DISCIPLINE:
+A thesis has two natural endings — completion and failure. Both are valid reasons to exit.
+
+Thesis COMPLETION: The setup has fully played out. RSI recovered to 50+, price returned to or through MA20, the expected move delivered. This is success, not a reason to hold by default. If you see a new developing setup forming (momentum extending, sector rotation continuing, fresh catalyst) you may choose to stay in — that is your call. But do not hold simply because nothing is broken. A completed thesis with no new thesis is a reason to exit and redeploy.
+
+Thesis BREAK: RSI fails to recover, price breaks below MA20, original catalyst invalidated, macro shifts against the setup. Exit without hesitation.
+
+When stop-loss and take-profit rules are set to 0 — you have full discretion. Use your own read of RSI trajectory, price vs MA, sector momentum, volume, and macro backdrop to decide. Neither holding nor selling is the default. Make the active choice each cycle.
 
 NEVER do this:
 - Buy simply because news is positive. Ask: is this already priced in?
@@ -101,7 +110,7 @@ This session runs endlessly — you keep trading until the user closes it from t
 CAPITAL DEPLOYMENT:
 - Your job is to grow the portfolio. Sitting in cash all session is failure — you make money by being in the market.
 - Each cycle, scan DIFFERENT stocks from your watchlist — do not keep checking the same 2-3 stocks. Cover the full watchlist over multiple cycles.
-- If you have significant free cash (>40% of starting capital), actively look for new positions to deploy into.
+- If you have significant free cash (>20% of starting capital), actively look for new positions to deploy into.
 - You can BUY multiple stocks in a single cycle if setups exist.
 - Compound gains: winning trades free up capital → deploy it in the next good setup.
 - If no great setups exist today, note candidates in session memory for tomorrow.
@@ -115,22 +124,22 @@ DECISION PROCESS
 4. Check your free cash — if significant cash available, look for new setups.
 5. Scan 5-8 stocks from your watchlist using get_indicators() and get_current_price(). Rotate across the full list each cycle.
 6. For any candidate: get news (get_stock_news), check if the macro context supports the trade. Use search_web if you see unusual moves and don't know the cause.
-7. Make decisions: BUY/SELL multiple stocks if setups exist — one object per decision.
-8. If BUY: call write_trade_rationale() with entry price, stop-loss, take-profit, and thesis.
-9. Call update_session_memory() — include macro regime, decisions made, next-cycle goals, stocks to scan next. Max 2400 chars.
+7. Execute trades: call execute_trade(action, symbol, quantity, ...) for every BUY or SELL. The tool runs immediately and returns success or rejection with the exact reason. If rejected (e.g. quantity too large), the reason includes the correct max quantity — retry immediately with the corrected quantity. You can call execute_trade multiple times in one cycle.
+8. Call update_session_memory() — include macro regime, decisions made, next-cycle goals, stocks to scan next. Max 2880 chars.
 
 {watchlist_adjustment_block}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT (strict JSON array format)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Output a JSON array with one object per decision. If no trades, output a single HOLD. Examples:
+After all tool calls (including execute_trade), output a JSON array summarising the cycle outcome.
+BUY/SELL are executed via execute_trade — do NOT put them here. This array is for HOLD and flags only.
 
-One HOLD: [{{"action": "HOLD", "symbol": null, "quantity": null, "stop_loss_price": null, "take_profit_price": null, "reason": "<why>", "confidence": "low", "flags": []}}]
+HOLD (no trades): [{{"action": "HOLD", "symbol": null, "quantity": null, "stop_loss_price": null, "take_profit_price": null, "reason": "<summary of cycle and why no new trades>", "confidence": "low", "flags": []}}]
 
-Multiple trades: [{{"action": "BUY", "symbol": "RELIANCE", "quantity": 5, "stop_loss_price": 2800.0, "take_profit_price": 3100.0, "reason": "<thesis>", "confidence": "high", "flags": []}}, {{"action": "SELL", "symbol": "TCS", "quantity": 10, "stop_loss_price": null, "take_profit_price": null, "reason": "<why selling>", "confidence": "high", "flags": []}}]
+After trades executed via execute_trade: [{{"action": "HOLD", "symbol": null, "quantity": null, "stop_loss_price": null, "take_profit_price": null, "reason": "<summary: what was bought/sold and why>", "confidence": "high", "flags": []}}]
 
-Flags: "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
+Flags (set in the HOLD object): "DAILY_LIMIT_HIT", "HALT_SESSION", "ALERT_USER"
 
 Output JSON array only — no markdown, explanation, or text outside the array."""
 
@@ -166,7 +175,7 @@ Watchlist: {watchlist_summary}
 
 Holdings: {open_positions}
 
-Stats: {session_stats}
+Stats: {session_stats}{failed_trades_section}
 
 Decide."""
 
@@ -212,16 +221,18 @@ class ContextBuilder:
             )
 
         rules = self.config.risk_rules
+        starting_capital = self.config.starting_capital
         prompt = SYSTEM_PROMPT_TEMPLATE.format(
             execution_mode=self.config.execution_mode.value.upper(),
             trading_mode=self.config.trading_mode.value.upper(),
-            starting_capital=self.config.starting_capital,
-            current_capital=session["current_capital"] if session else self.config.starting_capital,
+            starting_capital=starting_capital,
+            current_capital=session["current_capital"] if session else starting_capital,
             secured_profit=session["secured_profit"] if session else 0,
             current_day=session["current_day"] if session else 1,
             current_time=datetime.now(_IST).strftime("%I:%M %p IST"),
             mode_mandate=self.config.mode_mandate,
             max_per_trade=rules.max_per_trade,
+            max_trade_value=starting_capital * rules.max_per_trade / 100,
             stop_loss=rules.stop_loss,
             take_profit=rules.take_profit,
             max_positions=rules.max_positions,
@@ -349,6 +360,18 @@ class ContextBuilder:
         else:
             session_stats = "N/A"
 
+        # Failed trades from last 2 cycles — so Claude knows what was rejected
+        failed_rows = db.query(
+            "SELECT symbol, quantity, reason, decided_at FROM decisions "
+            "WHERE session_id = ? AND action = 'TRADE_FAILED' "
+            "ORDER BY decided_at DESC LIMIT 5",
+            (self.session_id,),
+        )
+        failed_trades_section = ""
+        if failed_rows:
+            lines = [f"  {r['symbol']} ×{r['quantity']}: {r['reason']}" for r in failed_rows]
+            failed_trades_section = "\n\nFailed Trades (NOT executed — position unchanged):\n" + "\n".join(lines)
+
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
             market_snapshot=market_text,
@@ -357,4 +380,5 @@ class ContextBuilder:
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,
             session_stats=session_stats,
+            failed_trades_section=failed_trades_section,
         )

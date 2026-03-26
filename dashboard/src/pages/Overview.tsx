@@ -17,7 +17,7 @@ function calcDeployed(positions: PortfolioPosition[], sessionId: number): number
 
 function SessionCard({ session, allPositions }: { session: Session; allPositions: PortfolioPosition[] }) {
   const deployed = calcDeployed(allPositions, session.id)
-  const totalValue = session.current_capital + deployed
+  const totalValue = session.current_capital + deployed + session.secured_profit
   const pnlAbs = totalValue - session.starting_capital
   const pnlPct = session.starting_capital > 0 ? (pnlAbs / session.starting_capital) * 100 : 0
   const deployedPct = totalValue > 0 ? (deployed / totalValue) * 100 : 0
@@ -62,6 +62,11 @@ function SessionCard({ session, allPositions }: { session: Session; allPositions
           <div className={`text-xs mt-0.5 font-mono ${pnlAbs >= 0 ? 'text-profit' : 'text-loss'}`}>
             {pnlAbs >= 0 ? '+' : ''}₹{Math.abs(pnlAbs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
+          {session.secured_profit > 0 && (
+            <div className="text-xs mt-0.5 font-mono text-amber-400">
+              ₹{session.secured_profit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} secured
+            </div>
+          )}
         </div>
 
         {/* Cash */}
@@ -86,14 +91,6 @@ function SessionCard({ session, allPositions }: { session: Session; allPositions
           </div>
           <div className="text-xs text-gray-600 mt-0.5">{deployedPct.toFixed(0)}% deployed</div>
         </div>
-
-        {/* Secured profit */}
-        {session.secured_profit > 0 && (
-          <div className="col-span-2 pt-2 border-t border-gray-800">
-            <div className="text-xs text-gray-500 mb-1">Secured Profit</div>
-            <div className="text-sm font-mono text-profit">+₹{session.secured_profit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-          </div>
-        )}
       </div>
     </div>
   )
@@ -136,7 +133,8 @@ function CombinedStats({
   const totalStarting = sessions.reduce((s, x) => s + x.starting_capital, 0)
   const totalDeployed = sessions.reduce((s, x) => s + calcDeployed(positions, x.id), 0)
   const totalCash = sessions.reduce((s, x) => s + x.current_capital, 0)
-  const totalValue = totalCash + totalDeployed
+  const totalSecured = sessions.reduce((s, x) => s + x.secured_profit, 0)
+  const totalValue = totalCash + totalDeployed + totalSecured
   const totalPnl = totalValue - totalStarting
   const totalPnlPct = totalStarting > 0 ? (totalPnl / totalStarting) * 100 : 0
   const activeSessions = sessions.filter((s) => s.status === 'active').length
@@ -163,6 +161,11 @@ function CombinedStats({
           <div className={`text-sm font-mono mt-0.5 ${totalPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
             {totalPnl >= 0 ? '+' : ''}₹{Math.abs(totalPnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
+          {totalSecured > 0 && (
+            <div className="text-sm font-mono mt-0.5 text-amber-400">
+              ₹{totalSecured.toLocaleString('en-IN', { maximumFractionDigits: 0 })} secured
+            </div>
+          )}
         </div>
         <div>
           <div className="text-xs text-gray-500 mb-1">Cash Available</div>
