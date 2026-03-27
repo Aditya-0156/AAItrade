@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench, Settings } from 'lucide-react'
+import { Activity as ActivityIcon, Filter, TrendingUp, TrendingDown, Minus, Wrench, Settings, ChevronDown, ChevronUp } from 'lucide-react'
 import { fetchSessions, fetchDecisions, fetchToolCalls } from '../api'
 import type { Session, Decision, ToolCall } from '../types'
 
@@ -59,6 +59,7 @@ function actionColor(action: string): string {
 }
 
 function DecisionRow({ decision }: { decision: Decision }) {
+  const [expanded, setExpanded] = useState(false)
   const flags = parseFlags(decision.flags)
   const isSettingsUpdate = flags.includes('SETTINGS_UPDATE')
   const color = isSettingsUpdate
@@ -111,21 +112,34 @@ function DecisionRow({ decision }: { decision: Decision }) {
             </span>
           ))}
         </div>
-        <div className="flex-shrink-0 text-right">
-          <div className="text-xs text-gray-500">{toIST(decision.decided_at)}</div>
-          <div className="text-xs text-gray-600">
-            {decision.session_name} · C{decision.cycle_number}
+        <div className="flex items-start gap-2 flex-shrink-0">
+          <div className="text-right">
+            <div className="text-xs text-gray-500">{toIST(decision.decided_at)}</div>
+            <div className="text-xs text-gray-600">
+              {decision.session_name} · C{decision.cycle_number}
+            </div>
           </div>
+          {decision.reason && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-0.5 text-gray-600 hover:text-gray-400 transition-colors"
+            >
+              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          )}
         </div>
       </div>
       {decision.reason && (
-        <p className="text-xs text-gray-400 mt-1 leading-relaxed line-clamp-2">{decision.reason}</p>
+        <p className={`text-xs text-gray-400 mt-1 leading-relaxed whitespace-pre-wrap ${expanded ? '' : 'line-clamp-2'}`}>
+          {decision.reason}
+        </p>
       )}
     </div>
   )
 }
 
 function ToolCallRow({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false)
   let paramsPreview = tc.parameters ?? ''
   try {
     const p = JSON.parse(tc.parameters ?? '{}')
@@ -147,15 +161,25 @@ function ToolCallRow({ tc }: { tc: ToolCall }) {
             <span className="text-xs text-gray-600 truncate max-w-xs">{paramsPreview}</span>
           )}
         </div>
-        <div className="flex-shrink-0 text-right">
-          <div className="text-xs text-gray-500">{toIST(tc.called_at)}</div>
-          <div className="text-xs text-gray-600">
-            {tc.session_name} · C{tc.cycle_number}
+        <div className="flex items-start gap-2 flex-shrink-0">
+          <div className="text-right">
+            <div className="text-xs text-gray-500">{toIST(tc.called_at)}</div>
+            <div className="text-xs text-gray-600">
+              {tc.session_name} · C{tc.cycle_number}
+            </div>
           </div>
+          {tc.result_summary && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-0.5 text-gray-600 hover:text-gray-400 transition-colors"
+            >
+              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          )}
         </div>
       </div>
       {tc.result_summary && (
-        <p className="text-xs text-gray-500 mt-1 leading-relaxed line-clamp-2">
+        <p className={`text-xs text-gray-500 mt-1 leading-relaxed whitespace-pre-wrap ${expanded ? '' : 'line-clamp-2'}`}>
           {tc.result_summary}
         </p>
       )}
