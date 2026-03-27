@@ -131,6 +131,8 @@ _TOOL_MODULES = [
     "aaitrade.tools.watchlist_tools",
     "aaitrade.tools.session_memory",
     "aaitrade.tools.trading",
+    "aaitrade.tools.fiidii",
+    "aaitrade.tools.fundamentals",
 ]
 
 

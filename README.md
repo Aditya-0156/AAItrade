@@ -147,7 +147,7 @@ aaitrade --recover
 ```
 
 ### Live Trading Note
-Live mode places real orders via Zerodha Kite Connect. To sell holdings, your demat account needs **DDPI (Demat Debit and Pledge Instructions)** activated — a one-time e-sign via the Zerodha console. Without it, sell orders require manual CDSL TPIN authorisation per trade. The Kite access token expires daily and must be refreshed each morning before market open.
+Live mode places real orders via Zerodha Kite Connect. Selling requires **DDPI (Demat Debit and Pledge Instructions)** to be activated on your Zerodha account — a one-time e-sign via the Zerodha console. Once active, sells execute automatically just like buys. The Kite access token expires daily and must be refreshed each morning before market open.
 
 ### Telegram Commands
 | Command | Action |

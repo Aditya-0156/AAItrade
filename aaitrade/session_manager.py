@@ -248,6 +248,8 @@ class SessionManager:
                 tavily_client = TavilyClient(api_key=self.keys.tavily)
                 from aaitrade.tools.search import set_tavily_client
                 set_tavily_client(tavily_client)
+                from aaitrade.tools.fiidii import set_tavily_client as set_fiidii_tavily
+                set_fiidii_tavily(tavily_client)
                 logger.info("Tavily search initialized")
             except Exception as e:
                 logger.warning(f"Tavily initialization failed: {e}")

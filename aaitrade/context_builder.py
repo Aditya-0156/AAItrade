@@ -87,14 +87,22 @@ ALWAYS ask:
 - What would prove this trade wrong? If that condition is met, exit without hesitation.
 - Is this a good risk/reward? Only enter if potential gain is at least 2x the potential loss.
 
-PROVEN STRATEGIES (use these as your primary frameworks, apply similar logic to others you identify):
-1. Oversold Bounce — RSI below 35 + stock down 10-15% from recent high + fundamentals intact + positive catalyst forming → buy the dip targeting mean reversion. The stock going DOWN is the opportunity, not the warning.
-2. Breakout on Volume — Stock consolidating near resistance for 3+ days, then breaks above on above-average volume → buy the breakout, stop just below the breakout level. Momentum confirmed by volume is high probability.
-3. Sector Rotation — Macro event favors a sector (RBI rate cut → banks, weak rupee → IT exporters, oil drop → aviation/paints/tyres) → find the strongest stock in that sector that has NOT yet moved. Buy the laggard, not the leader.
+STRATEGY REFERENCE (use when data supports them — let the data guide your approach, do not force a strategy onto the market):
+1. Oversold Bounce — RSI below 35 + stock down 10-15% from recent high + fundamentals intact. BUT FIRST: check TREND and RET_3M/RET_6M in get_indicators. If TREND=DOWN and 3m/6m returns are both negative, the stock is in a sustained downtrend — oversold may just mean it hasn't finished falling. Oversold bounces work best when the longer-term trend is neutral or up and the dip is event-driven, not structural.
+2. Breakout on Volume — Stock consolidating near resistance, then breaks above on VOL_R > 1.5 (above-average volume). Stop just below the breakout level. Check RS_NIFTY — a breakout in a stock that's outperforming Nifty is higher quality.
+3. Sector Rotation — Macro event favors a sector (RBI rate cut → banks, weak rupee → IT exporters, oil drop → aviation/paints/tyres). Use get_indicators on multiple stocks in the sector, pick the one with best RS_NIFTY that hasn't yet moved.
+4. Trend Following — Stock in TREND=UP with positive 3m/6m returns, RSI 40-60, pulling back to MA20 on low volume (VOL_R < 0.8). Buy the pullback within the uptrend. Higher probability than catching falling knives.
+
+TREND-AWARENESS (critical):
+- Before ANY buy, check get_indicators for TREND, RET_3M, RET_6M, and %_FR_HI (distance from 52-week high).
+- A stock near its 52-week low with TREND=DOWN and negative 6m return needs a very strong catalyst to reverse — do not buy just because RSI is oversold.
+- A stock with TREND=UP pulling back to MA20 is a much higher probability setup than a stock in TREND=DOWN bouncing off new lows.
+- RS_NIFTY tells you if the stock is leading or lagging the market. Prefer stocks with RS_NIFTY > 0 (outperforming).
+- VOL_R on the bounce matters: VOL_R > 1.5 = institutional interest, VOL_R < 0.5 = weak retail bounce likely to fail.
 
 TIME HORIZON: Think 3-7 market days per trade, not same-day. A stock you identify today may need 1-2 cycles of monitoring before the right entry. Use session memory to track setups in progress.
 
-ALWAYS log the strategy name used (e.g. "Oversold Bounce", "Breakout", "Sector Rotation") in your trade rationale and session memory so patterns can be reviewed.
+ALWAYS log the strategy name used (e.g. "Oversold Bounce", "Breakout", "Sector Rotation", "Trend Following") in your trade rationale and session memory so patterns can be reviewed.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SCHEDULE & RHYTHM

@@ -289,8 +289,10 @@ def get_current_price(symbol: str) -> dict:
 @register_tool(
     name="get_price_history",
     description=(
-        "Get historical OHLCV candles for an NSE stock. Returns daily candles "
-        "for the requested number of days."
+        "Get historical OHLCV candles for an NSE stock. Returns daily candles. "
+        "Max 360 days. Use 'step' to reduce output for long lookbacks: "
+        "e.g. days=360, step=10 returns 36 candles covering a full year. "
+        "Default (days=60, step=1) gives 60 daily candles for recent analysis."
     ),
     parameters={
         "properties": {
@@ -300,27 +302,73 @@ def get_current_price(symbol: str) -> dict:
             },
             "days": {
                 "type": "integer",
-                "description": "Number of past trading days to fetch (max 60)",
+                "description": "Number of past trading days to fetch (max 360)",
+            },
+            "step": {
+                "type": "integer",
+                "description": "Return every Nth candle (default 1). Use step>1 for longer lookbacks to keep output compact. E.g. step=5 with days=180 returns 36 candles.",
             },
         },
         "required": ["symbol", "days"],
     },
 )
-def get_price_history(symbol: str, days: int = 30) -> dict:
-    days = min(days, 60)
+def get_price_history(symbol: str, days: int = 60, step: int = 1) -> dict:
+    days = min(days, 360)
+    step = max(1, step)
     try:
         if _data_source == "kite" and _kite:
-            return _kite_get_history(symbol, days)
-        return _yf_get_history(symbol, days)
+            result = _kite_get_history(symbol, days)
+        else:
+            result = _yf_get_history(symbol, days)
+        if step > 1 and "candles" in result:
+            result["candles"] = result["candles"][::step]
+            result["step"] = step
+        return result
     except Exception as e:
         logger.error(f"get_price_history failed for {symbol}: {e}")
         return {"error": str(e), "symbol": symbol}
 
 
+# ── Nifty return cache (for relative strength) ──────────────────────────
+
+_nifty_returns: dict[str, float | None] = {}  # "1m", "3m", "6m" -> return %
+_nifty_cache_date: str | None = None
+
+
+def _get_nifty_returns() -> dict[str, float | None]:
+    """Get Nifty 50 returns for 1m/3m/6m. Cached per day."""
+    global _nifty_returns, _nifty_cache_date
+    today = datetime.now(_IST).strftime("%Y-%m-%d")
+    if _nifty_cache_date == today and _nifty_returns:
+        return _nifty_returns
+
+    try:
+        import yfinance as yf
+        hist = yf.Ticker("^NSEI").history(period="200d")
+        if hist.empty or len(hist) < 22:
+            return {}
+        closes = hist["Close"]
+        current = float(closes.iloc[-1])
+        ret = {}
+        for label, lookback in [("1m", 22), ("3m", 66), ("6m", 132)]:
+            if len(closes) >= lookback:
+                past = float(closes.iloc[-lookback])
+                ret[label] = round((current - past) / past * 100, 1)
+            else:
+                ret[label] = None
+        _nifty_returns = ret
+        _nifty_cache_date = today
+        return ret
+    except Exception as e:
+        logger.warning(f"Nifty return fetch failed: {e}")
+        return {}
+
+
 def _compute_indicators_one(symbol: str) -> dict:
     """Compute indicators for a single symbol. Returns a dict or error dict."""
     try:
-        history = get_price_history(symbol, days=60)
+        # Fetch 260 days internally for 52-week data and 6-month returns
+        history = get_price_history(symbol, days=260)
         if "error" in history:
             return {"symbol": symbol, "error": history["error"]}
 
@@ -330,7 +378,11 @@ def _compute_indicators_one(symbol: str) -> dict:
 
         df = pd.DataFrame(candles)
         df["close"] = pd.to_numeric(df["close"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
         df["volume"] = pd.to_numeric(df["volume"])
+
+        price = round(float(df["close"].iloc[-1]), 2)
 
         # RSI 14
         try:
@@ -344,29 +396,64 @@ def _compute_indicators_one(symbol: str) -> dict:
             rs = gain / loss
             rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
 
+        # Moving averages
         ma_20 = round(float(df["close"].rolling(20).mean().iloc[-1]), 2)
         ma_50 = round(float(df["close"].rolling(50).mean().iloc[-1]), 2) if len(df) >= 50 else None
-        price = round(float(df["close"].iloc[-1]), 2)
 
+        # MA alignment — trend direction
+        if ma_50:
+            diff_pct = abs(ma_20 - ma_50) / ma_50 * 100
+            if diff_pct < 0.5:
+                trend = "flat"
+            elif ma_20 > ma_50:
+                trend = "UP"
+            else:
+                trend = "DOWN"
+        else:
+            trend = "-"
+
+        # Volume ratio (today vs 20-day avg)
         avg_vol = float(df["volume"].rolling(20).mean().iloc[-1])
         vol_ratio = round(float(df["volume"].iloc[-1]) / avg_vol, 2) if avg_vol > 0 else None
+        vol_sig = "high" if vol_ratio and vol_ratio > 1.5 else "normal" if vol_ratio and vol_ratio > 0.7 else "low"
 
+        # RSI signal
         if rsi is None:       rsi_sig = "?"
         elif rsi > 70:        rsi_sig = "overbought"
         elif rsi < 30:        rsi_sig = "oversold"
         else:                 rsi_sig = "neutral"
 
-        ma20_pos = "above" if price > ma_20 else "below"
-        ma50_pos = ("above" if price > ma_50 else "below") if ma_50 else "-"
+        # Return percentages (1m/3m/6m)
+        ret_1m = ret_3m = ret_6m = None
+        for label, lookback in [("1m", 22), ("3m", 66), ("6m", 132)]:
+            if len(df) >= lookback:
+                past_price = float(df["close"].iloc[-lookback])
+                ret = round((price - past_price) / past_price * 100, 1)
+                if label == "1m": ret_1m = ret
+                elif label == "3m": ret_3m = ret
+                else: ret_6m = ret
 
-        vol_sig = "high" if vol_ratio and vol_ratio > 1.5 else "normal" if vol_ratio and vol_ratio > 0.7 else "low"
+        # 52-week high/low (use all available data, up to 260 days)
+        high_52w = round(float(df["high"].max()), 2)
+        low_52w = round(float(df["low"].min()), 2)
+        pct_from_high = round((price - high_52w) / high_52w * 100, 1)
+        pct_from_low = round((price - low_52w) / low_52w * 100, 1)
+
+        # Relative strength vs Nifty (1-month)
+        nifty_ret = _get_nifty_returns()
+        rs_vs_nifty = None
+        if ret_1m is not None and nifty_ret.get("1m") is not None:
+            rs_vs_nifty = round(ret_1m - nifty_ret["1m"], 1)
 
         return {
             "symbol": symbol, "price": price,
             "rsi": rsi, "rsi_sig": rsi_sig,
-            "ma20": ma_20, "ma20_pos": ma20_pos,
-            "ma50": ma_50 or "-", "ma50_pos": ma50_pos,
+            "ma20": ma_20, "ma50": ma_50 or "-", "trend": trend,
             "vol_ratio": vol_ratio, "vol_sig": vol_sig,
+            "ret_1m": ret_1m, "ret_3m": ret_3m, "ret_6m": ret_6m,
+            "high_52w": high_52w, "pct_from_high": pct_from_high,
+            "low_52w": low_52w, "pct_from_low": pct_from_low,
+            "rs_vs_nifty": rs_vs_nifty,
         }
     except Exception as e:
         logger.error(f"get_indicators failed for {symbol}: {e}")
@@ -376,10 +463,12 @@ def _compute_indicators_one(symbol: str) -> dict:
 @register_tool(
     name="get_indicators",
     description=(
-        "Get technical indicators for up to 5 NSE stocks in one call: RSI(14), "
-        "20-day MA, 50-day MA, and volume ratio vs 20-day average. "
-        "Returns a compact table — one row per symbol. "
-        "Always batch multiple symbols into a single call instead of calling one at a time."
+        "Get technical indicators + trend context for up to 5 NSE stocks: RSI(14), "
+        "MA20, MA50, MA trend (UP/DOWN/flat), volume ratio, 1m/3m/6m returns, "
+        "52-week high/low with % distance, and relative strength vs Nifty. "
+        "ALWAYS check TREND and RET_3M/RET_6M before playing an oversold bounce — "
+        "a stock in a sustained downtrend (TREND=DOWN, negative 3m/6m) may be a falling knife. "
+        "Returns a compact table — one row per symbol. Batch multiple symbols."
     ),
     parameters={
         "properties": {
@@ -396,8 +485,8 @@ def get_indicators(symbols: list) -> dict:
     symbols = symbols[:5]
     rows = [_compute_indicators_one(s) for s in symbols]
 
-    # Build compact pipe-table so keys are not repeated per row
-    header = "SYMBOL|PRICE|RSI|RSI_SIG|MA20|MA20_POS|MA50|MA50_POS|VOL_RATIO|VOL_SIG"
+    # Compact pipe-table with trend context
+    header = "SYMBOL|PRICE|RSI|RSI_SIG|MA20|MA50|TREND|VOL_R|VOL_SIG|RET_1M|RET_3M|RET_6M|52W_HI|%_FR_HI|52W_LO|RS_NIFTY"
     lines = [header]
     errors = []
     for r in rows:
@@ -406,8 +495,11 @@ def get_indicators(symbols: list) -> dict:
             continue
         lines.append(
             f"{r['symbol']}|{r['price']}|{r['rsi']}|{r['rsi_sig']}|"
-            f"{r['ma20']}|{r['ma20_pos']}|{r['ma50']}|{r['ma50_pos']}|"
-            f"{r['vol_ratio']}|{r['vol_sig']}"
+            f"{r['ma20']}|{r['ma50']}|{r['trend']}|"
+            f"{r['vol_ratio']}|{r['vol_sig']}|"
+            f"{r.get('ret_1m', '-')}|{r.get('ret_3m', '-')}|{r.get('ret_6m', '-')}|"
+            f"{r.get('high_52w', '-')}|{r.get('pct_from_high', '-')}|{r.get('low_52w', '-')}|"
+            f"{r.get('rs_vs_nifty', '-')}"
         )
 
     result: dict = {"table": "\n".join(lines)}
