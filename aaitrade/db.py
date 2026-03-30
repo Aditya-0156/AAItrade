@@ -55,6 +55,23 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Ensure stock_thesis_log table exists (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stock_thesis_log ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "symbol TEXT NOT NULL, date TEXT NOT NULL, "
+                "note TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'watching', "
+                "session_id INTEGER, created_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol "
+                "ON stock_thesis_log(symbol, date)"
+            )
+    except Exception:
+        pass
+
     # Add risk settings columns if missing
     try:
         with get_connection() as conn:
@@ -222,6 +239,18 @@ CREATE TABLE IF NOT EXISTS session_memory (
     updated_at      TEXT NOT NULL,
     cycle_number    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS stock_thesis_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,              -- YYYY-MM-DD (IST)
+    note        TEXT NOT NULL,              -- max 80 words, enforced in tool layer
+    phase       TEXT NOT NULL DEFAULT 'watching', -- watching / holding / sold / avoided
+    session_id  INTEGER,                    -- optional link to session
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
 """
 
 

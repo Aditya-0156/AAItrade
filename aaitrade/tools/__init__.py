@@ -133,6 +133,7 @@ _TOOL_MODULES = [
     "aaitrade.tools.trading",
     "aaitrade.tools.fiidii",
     "aaitrade.tools.fundamentals",
+    "aaitrade.tools.stock_thesis",
 ]
 
 
