@@ -350,14 +350,22 @@ class ContextBuilder:
 
         if positions_data["total"] > 0:
             pos_lines = []
+            now_ist = datetime.now(_IST)
             for p in positions_data["open_positions"]:
                 latest_thesis = ""
                 if p["thesis_updates"]:
                     latest_thesis = f" | Latest review: {p['thesis_updates'][-1]['note']}"
 
+                try:
+                    opened = datetime.fromisoformat(p["opened_at"]).replace(tzinfo=_IST)
+                    days_held = (now_ist - opened).days
+                    hold_str = f"Day {days_held + 1} (bought {opened.strftime('%d %b')})"
+                except Exception:
+                    hold_str = "hold duration unknown"
+
                 pos_lines.append(
                     f"  {p['symbol']} | {p['quantity']} shares @ ₹{p['entry_price']:.2f} | "
-                    f"Target: ₹{p['target_price']:.2f} | Stop: ₹{p['stop_price']:.2f}\n"
+                    f"Target: ₹{p['target_price']:.2f} | Stop: ₹{p['stop_price']:.2f} | {hold_str}\n"
                     f"    Thesis: {p['key_thesis']}{latest_thesis}"
                 )
             open_positions = "\n".join(pos_lines)
