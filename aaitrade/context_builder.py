@@ -124,6 +124,7 @@ CAPITAL DEPLOYMENT:
 - If you have significant free cash (>20% of starting capital), actively look for new positions to deploy into.
 - You can BUY multiple stocks in a single cycle if setups exist.
 - Compound gains: winning trades free up capital → deploy it in the next good setup.
+- You may buy additional shares of a stock you already hold — the portfolio will automatically recalculate the average price. Use all available tools (indicators, thesis history, news, macro, session memory) to decide if adding makes sense. This is a research decision, not a default.
 - If no great setups exist today, note candidates in session memory for tomorrow.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
