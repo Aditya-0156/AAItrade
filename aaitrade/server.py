@@ -345,12 +345,13 @@ class TradingServer:
             disable_tool("remove_from_watchlist")
 
         # Set tool context
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis
         portfolio_tools.set_session_id(session_id)
         memory.set_session_id(session_id)
         journal.set_session_id(session_id)
         watchlist_tools.set_session_id(session_id)
         session_memory.set_session_id(session_id)
+        session_analysis.set_session_id(session_id)
 
         thread = threading.Thread(
             target=self._run_session_safe,

@@ -307,12 +307,13 @@ class MultiSessionRunner:
     @staticmethod
     def _set_tool_context(manager: SessionManager):
         """Set all tool modules to the given session's context."""
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis
         portfolio_tools.set_session_id(manager.session_id)
         memory.set_session_id(manager.session_id)
         journal.set_session_id(manager.session_id)
         watchlist_tools.set_session_id(manager.session_id)
         session_memory.set_session_id(manager.session_id)
+        session_analysis.set_session_id(manager.session_id)
 
     @staticmethod
     def _sleep_until_tomorrow(now: datetime):

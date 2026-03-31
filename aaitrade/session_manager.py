@@ -118,12 +118,13 @@ class SessionManager:
             disable_tool("remove_from_watchlist")
 
         # Inject session_id into tool modules that need it
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)
         journal.set_session_id(self.session_id)
         watchlist_tools.set_session_id(self.session_id)
         session_memory.set_session_id(self.session_id)
+        session_analysis.set_session_id(self.session_id)
 
         # Initialize clients
         self._init_clients()
