@@ -89,6 +89,17 @@ def execute_trade(
     if not _executor:
         return {"status": "error", "reason": "Executor not initialized — cannot execute trade"}
 
+    # Hard block: no trades in Cycle 1 — market open is volatile and misleading
+    if _cycle_number is not None and _cycle_number == 1:
+        return {
+            "status": "rejected",
+            "reason": (
+                "Cycle 1 is observe-only. Market open is volatile and misleading — "
+                "use this cycle to research, scan indicators, read news, and build your plan. "
+                "Trade from Cycle 2 onwards."
+            ),
+        }
+
     decision = {
         "action": action.upper(),
         "symbol": symbol,
