@@ -110,12 +110,19 @@ def get_session_summary() -> dict:
     )
     today_pnl = today_pnl_rows[0]["total"] if today_pnl_rows and today_pnl_rows[0]["total"] else 0
 
-    total_pnl = session["current_capital"] + session["secured_profit"] - session["starting_capital"]
+    # Include deployed capital at cost so P&L reflects realized losses only, not deployed funds
+    deployed_row = db.query_one(
+        "SELECT COALESCE(SUM(quantity * avg_price), 0) as deployed FROM portfolio WHERE session_id = ?",
+        (_session_id,),
+    )
+    deployed = deployed_row["deployed"] if deployed_row else 0
+    total_pnl = session["current_capital"] + deployed + session["secured_profit"] - session["starting_capital"]
 
     return {
         "session_day": f"{session['current_day']} of {session['total_days']}",
         "starting_capital": session["starting_capital"],
         "current_capital": session["current_capital"],
+        "deployed_capital": round(deployed, 2),
         "secured_profit": session["secured_profit"],
         "total_pnl": round(total_pnl, 2),
         "total_pnl_percent": round((total_pnl / session["starting_capital"]) * 100, 2),
