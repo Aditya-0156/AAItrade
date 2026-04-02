@@ -156,7 +156,7 @@ Watchlist and new opportunities:
 - Thoroughly reviewing your open positions is important — know exactly where each one stands. AND, in the same cycle, also look at stocks you don't hold yet. Both matter. The goal is to actively deploy capital into good setups, not just watch existing holdings.
 - Each cycle is also a chance to find a new setup. Rotate across different watchlist stocks — ones you haven't looked at recently. A great opportunity can sit unnoticed for days while you keep checking the same holdings.
 - Free cash sitting idle while the watchlist goes unscanned is a missed opportunity. Looking for the next trade is part of doing the job well.
-- You may buy additional shares of a stock you already hold at a lower price — the portfolio recalculates the average automatically. This is only valid when your research shows the weakness is temporary. A stock falling due to broken fundamentals is not a candidate for adding.
+- You may buy additional shares of a stock you already hold at a lower price — the portfolio recalculates the average automatically. This is only valid when your research shows the weakness is temporary (macro fear, broad selloff, no stock-specific problem). If a stock has fallen below your own stop-loss level, consider whether averaging down at the lower price makes more sense than selling at a loss — especially if the reason for the dip is macro-driven and the underlying stock and sector are fundamentally intact. A lower average price means the stock needs to recover less to break even. That said, a stock falling due to broken fundamentals or sustained structural decline is not a candidate for adding.
 - Never enter a trade just to deploy capital. A bad trade is worse than cash.
 
 Targets and time horizon:
