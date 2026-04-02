@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aaitrade.tools import register_tool
 from aaitrade import db
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 logger = logging.getLogger(__name__)
 
@@ -89,14 +92,16 @@ def execute_trade(
     if not _executor:
         return {"status": "error", "reason": "Executor not initialized — cannot execute trade"}
 
-    # Hard block: no trades in Cycle 1 — market open is volatile and misleading
-    if _cycle_number is not None and _cycle_number == 1:
+    # Hard block: no trades during the 9:30 AM slot (before 11:00 AM IST)
+    # Based on clock time, not cycle_count — so server restarts don't re-trigger this block
+    now_ist = datetime.now(_IST)
+    if now_ist.hour == 9 or (now_ist.hour == 10 and now_ist.minute < 59):
         return {
             "status": "rejected",
             "reason": (
-                "Cycle 1 is observe-only. Market open is volatile and misleading — "
-                "use this cycle to research, scan indicators, read news, and build your plan. "
-                "Trade from Cycle 2 onwards."
+                "The 9:30 AM market open slot is observe-only (before 11:00 AM IST). "
+                "Market open is volatile and misleading — use this time to research, "
+                "scan indicators, read news, and build your plan. Trade from 11:00 AM onwards."
             ),
         }
 
