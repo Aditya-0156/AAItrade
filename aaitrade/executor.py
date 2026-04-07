@@ -295,6 +295,7 @@ class Executor:
                 quantity=quantity,
                 product=_kite.PRODUCT_CNC,
                 order_type=_kite.ORDER_TYPE_MARKET,
+                market_protection=0,
             )
 
             # Verify order status before updating DB
@@ -522,6 +523,7 @@ class Executor:
                 quantity=quantity,
                 product=_kite.PRODUCT_CNC,
                 order_type=_kite.ORDER_TYPE_MARKET,
+                market_protection=0,
             )
 
             # Verify order status before updating DB
