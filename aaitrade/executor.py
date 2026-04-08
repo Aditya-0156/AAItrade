@@ -294,8 +294,8 @@ class Executor:
                 transaction_type=_kite.TRANSACTION_TYPE_BUY,
                 quantity=quantity,
                 product=_kite.PRODUCT_CNC,
-                order_type=_kite.ORDER_TYPE_MARKET,
-                market_protection=0,
+                order_type=_kite.ORDER_TYPE_LIMIT,
+                price=round(price * 1.002, 1),  # 0.2% above to ensure fill
             )
 
             # Verify order status before updating DB
@@ -522,8 +522,8 @@ class Executor:
                 transaction_type=_kite.TRANSACTION_TYPE_SELL,
                 quantity=quantity,
                 product=_kite.PRODUCT_CNC,
-                order_type=_kite.ORDER_TYPE_MARKET,
-                market_protection=0,
+                order_type=_kite.ORDER_TYPE_LIMIT,
+                price=round(price * 0.998, 1),  # 0.2% below to ensure fill
             )
 
             # Verify order status before updating DB
