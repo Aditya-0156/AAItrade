@@ -287,16 +287,18 @@ class Executor:
             return {"status": "error", "reason": "Kite client not initialized for live trading"}
 
         try:
-            order_id = _kite.place_order(
-                variety=_kite.VARIETY_REGULAR,
-                exchange=_kite.EXCHANGE_NSE,
-                tradingsymbol=symbol,
-                transaction_type=_kite.TRANSACTION_TYPE_BUY,
-                quantity=quantity,
-                product=_kite.PRODUCT_CNC,
-                order_type=_kite.ORDER_TYPE_LIMIT,
-                price=round(price * 1.002, 1),  # 0.2% above to ensure fill
-            )
+            order_id = _kite._post("order.place",
+                url_args={"variety": _kite.VARIETY_REGULAR},
+                params={
+                    "variety": _kite.VARIETY_REGULAR,
+                    "exchange": _kite.EXCHANGE_NSE,
+                    "tradingsymbol": symbol,
+                    "transaction_type": _kite.TRANSACTION_TYPE_BUY,
+                    "quantity": quantity,
+                    "product": _kite.PRODUCT_CNC,
+                    "order_type": _kite.ORDER_TYPE_MARKET,
+                    "market_protection": 0,
+                })["order_id"]
 
             # Verify order status before updating DB
             import time
@@ -515,16 +517,18 @@ class Executor:
             return {"status": "error", "reason": "Kite client not initialized"}
 
         try:
-            order_id = _kite.place_order(
-                variety=_kite.VARIETY_REGULAR,
-                exchange=_kite.EXCHANGE_NSE,
-                tradingsymbol=symbol,
-                transaction_type=_kite.TRANSACTION_TYPE_SELL,
-                quantity=quantity,
-                product=_kite.PRODUCT_CNC,
-                order_type=_kite.ORDER_TYPE_LIMIT,
-                price=round(price * 0.998, 1),  # 0.2% below to ensure fill
-            )
+            order_id = _kite._post("order.place",
+                url_args={"variety": _kite.VARIETY_REGULAR},
+                params={
+                    "variety": _kite.VARIETY_REGULAR,
+                    "exchange": _kite.EXCHANGE_NSE,
+                    "tradingsymbol": symbol,
+                    "transaction_type": _kite.TRANSACTION_TYPE_SELL,
+                    "quantity": quantity,
+                    "product": _kite.PRODUCT_CNC,
+                    "order_type": _kite.ORDER_TYPE_MARKET,
+                    "market_protection": 0,
+                })["order_id"]
 
             # Verify order status before updating DB
             import time
