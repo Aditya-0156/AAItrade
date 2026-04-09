@@ -360,6 +360,16 @@ class SessionManager:
         """
         logger.info("Session running. Waiting for market hours...")
 
+        # Restore cycle_count from DB on recovery so Claude sees correct cycle number
+        if self._recovered:
+            last_cycle = db.query_one(
+                "SELECT MAX(cycle_number) as cn FROM decisions WHERE session_id = ?",
+                (self.session_id,),
+            )
+            if last_cycle and last_cycle["cn"]:
+                self.cycle_count = last_cycle["cn"]
+                logger.info(f"Recovered cycle_count from DB: {self.cycle_count}")
+
         try:
             while True:
                 session = db.query_one(
