@@ -287,18 +287,19 @@ class Executor:
             return {"status": "error", "reason": "Kite client not initialized for live trading"}
 
         try:
-            order_id = _kite._post("order.place",
-                url_args={"variety": _kite.VARIETY_REGULAR},
-                params={
-                    "variety": _kite.VARIETY_REGULAR,
-                    "exchange": _kite.EXCHANGE_NSE,
-                    "tradingsymbol": symbol,
-                    "transaction_type": _kite.TRANSACTION_TYPE_BUY,
-                    "quantity": quantity,
-                    "product": _kite.PRODUCT_CNC,
-                    "order_type": _kite.ORDER_TYPE_MARKET,
-                    "market_protection": 0,
-                })["order_id"]
+            # Use LIMIT order slightly above market to ensure immediate fill
+            # (Kite API requires market_protection for MARKET orders but SDK doesn't support it)
+            limit_price = round(price * 1.005, 1)  # 0.5% above current price
+            order_id = _kite.place_order(
+                variety=_kite.VARIETY_REGULAR,
+                exchange=_kite.EXCHANGE_NSE,
+                tradingsymbol=symbol,
+                transaction_type=_kite.TRANSACTION_TYPE_BUY,
+                quantity=quantity,
+                product=_kite.PRODUCT_CNC,
+                order_type=_kite.ORDER_TYPE_LIMIT,
+                price=limit_price,
+            )
 
             # Verify order status before updating DB
             import time
@@ -517,18 +518,18 @@ class Executor:
             return {"status": "error", "reason": "Kite client not initialized"}
 
         try:
-            order_id = _kite._post("order.place",
-                url_args={"variety": _kite.VARIETY_REGULAR},
-                params={
-                    "variety": _kite.VARIETY_REGULAR,
-                    "exchange": _kite.EXCHANGE_NSE,
-                    "tradingsymbol": symbol,
-                    "transaction_type": _kite.TRANSACTION_TYPE_SELL,
-                    "quantity": quantity,
-                    "product": _kite.PRODUCT_CNC,
-                    "order_type": _kite.ORDER_TYPE_MARKET,
-                    "market_protection": 0,
-                })["order_id"]
+            # Use LIMIT order slightly below market to ensure immediate fill
+            limit_price = round(price * 0.995, 1)  # 0.5% below current price
+            order_id = _kite.place_order(
+                variety=_kite.VARIETY_REGULAR,
+                exchange=_kite.EXCHANGE_NSE,
+                tradingsymbol=symbol,
+                transaction_type=_kite.TRANSACTION_TYPE_SELL,
+                quantity=quantity,
+                product=_kite.PRODUCT_CNC,
+                order_type=_kite.ORDER_TYPE_LIMIT,
+                price=limit_price,
+            )
 
             # Verify order status before updating DB
             import time
