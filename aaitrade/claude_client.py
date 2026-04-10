@@ -63,6 +63,7 @@ class ClaudeClient:
                         response = self.client.messages.create(
                             model=self.model,
                             max_tokens=8192,
+                            temperature=0.3,
                             system=[
                                 {
                                     "type": "text",
