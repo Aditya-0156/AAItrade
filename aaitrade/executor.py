@@ -250,11 +250,11 @@ class Executor:
                 "current_capital": round(session_cap["current_capital"] - trade_value, 2),
             })
 
-        # Write trade journal only after confirmed execution — never before
-        if not existing:  # new position only; adding to existing updates thesis via update_thesis
-            from aaitrade.tools.journal import write_trade_rationale
-            from aaitrade.tools.journal import _session_id as _j_session_id
-            if _j_session_id:
+        # Write or update trade journal after confirmed execution
+        from aaitrade.tools.journal import write_trade_rationale
+        from aaitrade.tools.journal import _session_id as _j_session_id
+        if _j_session_id:
+            if not existing:
                 write_trade_rationale(
                     symbol=symbol,
                     entry_price=price,
@@ -263,6 +263,20 @@ class Executor:
                     target_price=take_profit or 0,
                     stop_price=stop_loss or 0,
                 )
+            else:
+                # Averaging down — update journal entry_price to new weighted avg
+                journal = db.query_one(
+                    "SELECT id FROM trade_journal WHERE session_id = ? AND symbol = ? AND status = 'open'",
+                    (self.session_id, symbol),
+                )
+                if journal:
+                    new_avg = round(((existing["avg_price"] * existing["quantity"]) + (price * quantity)) / (existing["quantity"] + quantity), 2)
+                    db.update("trade_journal", journal["id"], {
+                        "entry_price": new_avg,
+                        "key_thesis": f"Averaged down. New avg ₹{new_avg}. " + decision.get("reason", ""),
+                        "stop_price": stop_loss or 0,
+                        "target_price": take_profit or 0,
+                    })
 
         return {
             "status": "executed",
@@ -370,11 +384,11 @@ class Executor:
                     "current_capital": round(session_cap["current_capital"] - trade_value, 2),
                 })
 
-            # Write trade journal only for new positions (not adds to existing)
-            if not existing:
-                from aaitrade.tools.journal import write_trade_rationale
-                from aaitrade.tools.journal import _session_id as _j_session_id
-                if _j_session_id:
+            # Write or update trade journal after confirmed execution
+            from aaitrade.tools.journal import write_trade_rationale
+            from aaitrade.tools.journal import _session_id as _j_session_id
+            if _j_session_id:
+                if not existing:
                     write_trade_rationale(
                         symbol=symbol,
                         entry_price=actual_price,
@@ -383,6 +397,20 @@ class Executor:
                         target_price=take_profit or 0,
                         stop_price=stop_loss or 0,
                     )
+                else:
+                    # Averaging down — update journal entry_price to new weighted avg
+                    journal = db.query_one(
+                        "SELECT id FROM trade_journal WHERE session_id = ? AND symbol = ? AND status = 'open'",
+                        (self.session_id, symbol),
+                    )
+                    if journal:
+                        new_avg = round(((existing["avg_price"] * existing["quantity"]) + (actual_price * quantity)) / (existing["quantity"] + quantity), 2)
+                        db.update("trade_journal", journal["id"], {
+                            "entry_price": new_avg,
+                            "key_thesis": f"Averaged down. New avg ₹{new_avg}. " + decision.get("reason", ""),
+                            "stop_price": stop_loss or 0,
+                            "take_profit_price": take_profit or 0,
+                        })
 
             logger.info(f"[LIVE] BUY {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
             return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price}
