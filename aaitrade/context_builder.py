@@ -98,6 +98,12 @@ Thesis & Memory:
 
 You may buy additional shares of a stock you already hold — the portfolio automatically recalculates the weighted average price.
 
+Price Alerts (between-cycle monitoring):
+- set_price_alert(symbol, target_price, direction, reason, margin_pct) — set a price alert. When the target is hit between scheduled cycles, you get woken up for an ad-hoc cycle to act immediately. Use 'below' for buy-the-dip alerts, 'above' for take-profit alerts. margin_pct defaults to 0.2%.
+- remove_price_alert(alert_id or symbol) — cancel an active alert
+- get_price_alerts() — see your active alerts
+Use these! You only get 4 scheduled cycles per day. If you see a stock close to a good entry but not quite there yet, set an alert instead of waiting 90 minutes.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INDIAN MARKET CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -258,7 +264,7 @@ Watchlist: {watchlist_summary}
 
 Holdings: {open_positions}
 
-Stats: {session_stats}{failed_trades_section}
+Stats: {session_stats}{failed_trades_section}{alert_section}
 
 Decide."""
 
@@ -332,8 +338,14 @@ class ContextBuilder:
 
         return prompt
 
-    def build_briefing(self, cycle_number: int) -> str:
-        """Build the per-cycle briefing with live data."""
+    def build_briefing(self, cycle_number: int, alert_trigger: list[dict] | None = None) -> str:
+        """Build the per-cycle briefing with live data.
+
+        Args:
+            cycle_number: The current cycle number.
+            alert_trigger: If set, this is an ad-hoc cycle triggered by price alerts.
+                          Each dict has: symbol, target_price, direction, reason, current_price
+        """
 
         # Market snapshot
         try:
@@ -463,6 +475,36 @@ class ContextBuilder:
             lines = [f"  {r['symbol']} ×{r['quantity']}: {r['reason']}" for r in failed_rows]
             failed_trades_section = "\n\nFailed Trades (NOT executed — position unchanged):\n" + "\n".join(lines)
 
+        # Alert trigger section (for ad-hoc cycles)
+        alert_section = ""
+        if alert_trigger:
+            alert_lines = []
+            for a in alert_trigger:
+                alert_lines.append(
+                    f"  🔔 {a['symbol']}: ₹{a['current_price']} hit {a['direction']} "
+                    f"₹{a['target_price']} — {a['reason']}"
+                )
+            alert_section = (
+                "\n\n⚡ PRICE ALERT TRIGGERED — This is an ad-hoc cycle. "
+                "You set these alerts earlier and the price target was hit. "
+                "Act on them now — BUY or SELL as you planned, or set new alerts.\n"
+                + "\n".join(alert_lines)
+            )
+        else:
+            # Show active alerts in regular cycles so Claude knows what's being watched
+            active_alerts = db.query(
+                "SELECT symbol, target_price, direction, margin_pct, reason "
+                "FROM price_alerts WHERE session_id = ? AND status = 'active' "
+                "ORDER BY created_at DESC LIMIT 10",
+                (self.session_id,),
+            )
+            if active_alerts:
+                alert_lines = [
+                    f"  {a['symbol']} {a['direction']} ₹{a['target_price']} (±{a['margin_pct']}%) — {a['reason']}"
+                    for a in active_alerts
+                ]
+                alert_section = "\n\nActive Price Alerts (monitoring between cycles):\n" + "\n".join(alert_lines)
+
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
             market_snapshot=market_text,
@@ -472,4 +514,5 @@ class ContextBuilder:
             open_positions=open_positions,
             session_stats=session_stats,
             failed_trades_section=failed_trades_section,
+            alert_section=alert_section,
         )

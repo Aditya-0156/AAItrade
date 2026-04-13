@@ -31,6 +31,7 @@ from aaitrade.reporter import Reporter
 from aaitrade.telegram_bot import get_bot
 from aaitrade.tools import load_all_tools, disable_tool
 from aaitrade.tools.news import get_macro_news
+from aaitrade.price_monitor import PriceMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -118,19 +119,26 @@ class SessionManager:
             disable_tool("remove_from_watchlist")
 
         # Inject session_id into tool modules that need it
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis, price_alerts
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)
         journal.set_session_id(self.session_id)
         watchlist_tools.set_session_id(self.session_id)
         session_memory.set_session_id(self.session_id)
         session_analysis.set_session_id(self.session_id)
+        price_alerts.set_alert_context(self.session_id, 0)
 
         # Initialize clients
         self._init_clients()
 
         # Validate watchlist symbols against Kite instrument cache
         self._validate_watchlist()
+
+        # Start price monitor (background thread for inter-cycle alerts)
+        self._price_monitor = PriceMonitor(
+            session_id=self.session_id,
+            trigger_callback=self._on_alert_triggered,
+        )
 
         # Notify via Telegram
         bot = get_bot()
@@ -222,6 +230,10 @@ class SessionManager:
                 set_market_kite(kite)
                 set_watchlist_kite(kite)
                 set_executor_kite(kite)
+
+                # Give price monitor the Kite client for efficient batch quotes
+                if hasattr(self, '_price_monitor'):
+                    self._price_monitor.set_kite_client(kite)
             except Exception as e:
                 if is_live:
                     raise RuntimeError(f"Kite Connect initialization failed: {e}. Check .env keys.")
@@ -370,6 +382,10 @@ class SessionManager:
                 self.cycle_count = last_cycle["cn"]
                 logger.info(f"Recovered cycle_count from DB: {self.cycle_count}")
 
+        # Start the price monitor background thread
+        if hasattr(self, '_price_monitor'):
+            self._price_monitor.start()
+
         try:
             while True:
                 session = db.query_one(
@@ -448,6 +464,8 @@ class SessionManager:
                 if due_slot:
                     h, m = due_slot
                     logger.info(f"Running cycle for slot {h:02d}:{m:02d} IST")
+                    if hasattr(self, '_price_monitor'):
+                        self._price_monitor.notify_cycle_start()
                     try:
                         pre_cycle_state = self._snapshot_state()
                         self._run_cycle(closing_mode=is_closing)
@@ -461,6 +479,9 @@ class SessionManager:
                         bot = get_bot()
                         if bot:
                             bot.send(f"⚠️ Cycle error in session {self.session_id}: {e}. State restored.")
+                    finally:
+                        if hasattr(self, '_price_monitor'):
+                            self._price_monitor.notify_cycle_end()
 
                 # Sleep until next slot (or tomorrow if all slots done)
                 now = datetime.now(_IST)
@@ -470,6 +491,91 @@ class SessionManager:
         except KeyboardInterrupt:
             logger.info("Session interrupted by user.")
             self._complete_session()
+        finally:
+            # Stop price monitor when session ends
+            if hasattr(self, '_price_monitor'):
+                self._price_monitor.stop()
+
+    def _on_alert_triggered(self, triggered_alerts: list[dict]):
+        """Called by PriceMonitor when price alerts fire. Runs an ad-hoc cycle."""
+        symbols = [a["symbol"] for a in triggered_alerts]
+        logger.info(f"Price alert triggered for: {', '.join(symbols)} — running ad-hoc cycle")
+
+        # Send Telegram notification
+        bot = get_bot()
+        if bot:
+            lines = []
+            for a in triggered_alerts:
+                lines.append(
+                    f"• {a['symbol']}: ₹{a['current_price']} hit "
+                    f"{a['direction']} ₹{a['target_price']} — {a['reason']}"
+                )
+            bot.send(
+                f"🔔 *Price Alert Triggered*\n" + "\n".join(lines) +
+                "\n\nRunning ad-hoc decision cycle..."
+            )
+
+        # Run an ad-hoc cycle with alert context
+        try:
+            self._price_monitor.notify_cycle_start()
+            self._run_alert_cycle(triggered_alerts)
+        except Exception as e:
+            logger.error(f"Alert-triggered cycle failed: {e}", exc_info=True)
+            if bot:
+                bot.send(f"⚠️ Alert cycle failed: {e}")
+        finally:
+            self._price_monitor.notify_cycle_end()
+
+    def _run_alert_cycle(self, triggered_alerts: list[dict]):
+        """Run a mini decision cycle triggered by price alerts."""
+        # Re-check session status
+        session_check = db.query_one(
+            "SELECT status FROM sessions WHERE id = ?",
+            (self.session_id,),
+        )
+        if not session_check or session_check["status"] not in ("active", "closing"):
+            return
+
+        is_closing = session_check["status"] == "closing"
+        self.cycle_count += 1
+        logger.info(f"{'─' * 40}")
+        logger.info(f"Alert-triggered cycle {self.cycle_count}")
+
+        # Build system prompt and briefing with alert context
+        system_prompt = self.context.build_system_prompt(closing_mode=is_closing)
+        briefing = self.context.build_briefing(
+            self.cycle_count,
+            alert_trigger=triggered_alerts,
+        )
+
+        # Inject executor into execute_trade tool
+        from aaitrade.tools.trading import set_trading_context
+        set_trading_context(self.executor, self.session_id, self.cycle_count)
+
+        # Inject cycle number into price_alerts tools
+        from aaitrade.tools.price_alerts import set_alert_context
+        set_alert_context(self.session_id, self.cycle_count)
+
+        # Get Claude's decisions
+        decisions = self.claude.make_decision(
+            system_prompt=system_prompt,
+            briefing=briefing,
+            session_id=self.session_id,
+            cycle_number=self.cycle_count,
+        )
+
+        logger.info(f"Alert cycle: received {len(decisions)} decision(s)")
+
+        bot = get_bot()
+        for decision in decisions:
+            action = decision.get("action", "").upper()
+            if action in ("BUY", "SELL"):
+                continue  # Already executed via execute_trade tool
+            logger.info(f"Decision: {action} [{decision.get('confidence', '')}] — {decision.get('reason', 'N/A')[:80]}")
+            if "HALT_SESSION" in decision.get("flags", []):
+                self.executor._halt_session(decision.get("reason", "Claude requested halt"))
+                if bot:
+                    bot.send_halt_alert(decision.get("reason", "Claude requested halt"), self.session_id)
 
     def _snapshot_state(self) -> dict:
         """Capture session state before a cycle for recovery purposes."""
@@ -590,6 +696,10 @@ class SessionManager:
         # Inject executor into execute_trade tool so it can run trades during Claude's reasoning
         from aaitrade.tools.trading import set_trading_context
         set_trading_context(self.executor, self.session_id, self.cycle_count)
+
+        # Inject cycle number into price_alerts tools
+        from aaitrade.tools.price_alerts import set_alert_context
+        set_alert_context(self.session_id, self.cycle_count)
 
         # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
         decisions = self.claude.make_decision(

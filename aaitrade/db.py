@@ -251,6 +251,23 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+CREATE TABLE IF NOT EXISTS price_alerts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id),
+    symbol          TEXT NOT NULL,
+    target_price    REAL NOT NULL,
+    direction       TEXT NOT NULL,              -- 'above' or 'below'
+    margin_pct      REAL NOT NULL DEFAULT 0.2,  -- trigger within ±margin% of target
+    reason          TEXT,                        -- why Claude set this alert
+    status          TEXT NOT NULL DEFAULT 'active',  -- active / triggered / cancelled
+    created_at      TEXT NOT NULL,
+    triggered_at    TEXT,
+    cycle_number    INTEGER                     -- which cycle created this alert
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_alerts_active
+    ON price_alerts(session_id, status) WHERE status = 'active';
 """
 
 

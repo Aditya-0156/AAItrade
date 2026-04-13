@@ -135,6 +135,7 @@ _TOOL_MODULES = [
     "aaitrade.tools.fundamentals",
     "aaitrade.tools.stock_thesis",
     "aaitrade.tools.session_analysis",
+    "aaitrade.tools.price_alerts",
 ]
 
 
