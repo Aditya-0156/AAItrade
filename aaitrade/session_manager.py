@@ -571,7 +571,8 @@ class SessionManager:
             action = decision.get("action", "").upper()
             if action in ("BUY", "SELL"):
                 continue  # Already executed via execute_trade tool
-            logger.info(f"Decision: {action} [{decision.get('confidence', '')}] — {decision.get('reason', 'N/A')[:80]}")
+            label = "TRADED" if action == "CYCLE_COMPLETE" else action
+            logger.info(f"Alert cycle end [{label}] — {decision.get('reason', 'N/A')[:100]}")
             if "HALT_SESSION" in decision.get("flags", []):
                 self.executor._halt_session(decision.get("reason", "Claude requested halt"))
                 if bot:
@@ -722,7 +723,9 @@ class SessionManager:
                 logger.debug(f"Skipping {action} {decision.get('symbol')} from final JSON — handled by execute_trade tool")
                 continue
 
-            logger.info(f"Decision: {action} [{decision.get('confidence', '')}] — {decision.get('reason', 'N/A')[:80]}")
+            # CYCLE_COMPLETE = trades happened, HOLD = no trades — both are informational only
+            label = "TRADED" if action == "CYCLE_COMPLETE" else action
+            logger.info(f"Cycle end [{label}] — {decision.get('reason', 'N/A')[:100]}")
 
             # Check for HALT_SESSION flag
             if "HALT_SESSION" in decision.get("flags", []):
