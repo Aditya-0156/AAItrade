@@ -184,13 +184,15 @@ That is ALL you need to ask. Not: "Is RSI perfect?" Not: "Is RS_NIFTY positive?"
 HOW TO SCAN — do this every cycle:
 Step 1: Call get_indicators on a BATCH of 8-12 watchlist stocks you haven't checked today. Pass them all at once as a list. This is fast and cheap.
 Step 2: From the results, filter for stocks where: 1-week return is negative (stock is down recently), OR RSI < 42 (approaching oversold), OR price is near 52-week low range.
-Step 3: For those filtered stocks (even 5-6 of them), call get_price_history(symbol, days=14, step=1). Look at the price shape: was it higher a week ago? Is it stabilising? Is this a local low?
-Step 4: If yes — local minima confirmed — call get_price_history(symbol, days=90, step=2) to see the 1-3 month price range. This tells you the stock's normal price — where it usually trades when the dip is over. This is your realistic profit target.
-Step 5: Now ask: from current local low, can this realistically recover 0.5-1% to reach somewhere in its normal 1-3 month range? If yes, BUY it. Set your target at the lower end of that normal range, not the top. Take the easy 0.5-1%, move on.
+Step 3: For those filtered stocks, call get_price_history(symbol, days=14, step=1). Look at the 14-day price shape and ask two things:
+  - Is this a local low? (price was higher 5-10 days ago, dipped, now sitting near the bottom)
+  - Did the price fluctuate during this period — going up and down — rather than just falling in a straight line? A stock that bounces around is healthy. A stock in a clean unbroken freefall is not a swing trade candidate.
+Step 4: If yes — local low with some bounce behaviour — call get_price_history(symbol, days=90, step=2). This shows the 1-3 month normal trading range. Check: is the stock's normal range at least 0.5-1% above where it is right now? If yes, the target is realistic and the trade makes sense.
+Step 5: BUY it. Target = wherever it was a week ago before the dip (which is naturally 0.5-2% above the local low for most quality stocks).
 
-THE KEY INSIGHT: The local minima is the buy signal — that is what tells you NOW is the entry. The 1-3 month history is the target reference — that is what tells you WHERE it will recover to. These are two separate questions. Do not mix them. A stock can be at a local minima even if the 3-month trend is down — what matters is whether today's price is a short-term dip that will bounce back even 0.5-1% in the next few days.
+THE KEY INSIGHT: The local minima is the entry signal. The 1-3 month range just confirms the target is reachable — if the stock normally trades well above current price, a 0.5-1% recovery is trivial. If the stock is at an all-time low with no history above current price, skip it.
 
-Example: Stock was ₹1480 a week ago, now ₹1430 (local minima, no bad news). 3-month range shows it normally trades ₹1420-₹1500. Target: ₹1440-1450. That is 0.7-1.4% profit on a stock that simply returns to where it was last week. Easy trade. BUY it.
+Example: Stock was ₹1480 a week ago, bounced between ₹1460-1480 for a few days, now at ₹1430. 3-month range shows it normally trades ₹1420-₹1500. Target: ₹1455-1465 (where it was recently). That is a 1.7-2.4% recovery to where it literally was last week. BUY it.
 
 PRICE ALERTS — use them aggressively:
 After scanning, for stocks that are CLOSE to a good entry but not quite there yet (e.g. stock at ₹1440, you want ₹1420), set a price alert instead of waiting 90 minutes for the next cycle. The monitor will wake you when it hits. Use set_price_alert for every stock where you are waiting for a slightly better price.
