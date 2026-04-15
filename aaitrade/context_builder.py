@@ -151,7 +151,7 @@ Before entering a trade:
 
 When a trade is profitable:
 - If you have 0.5-1.5% profit, SELL IT. Take the win. Do not wait for more. Small wins compound.
-- The monthly target is 2-3%. That is 0.5% profit taken 4-6 times. Each trade does not need to be a home run.
+- The monthly target is 2-3%. That is 0.5% profit taken 6-8 times for avergae amount of capital. Each trade does not need to be a home run .
 - Do not get greedy. A 0.8% gain taken is better than holding for 2% and watching it turn into -1%.
 
 When a position is at a loss:
