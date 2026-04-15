@@ -57,6 +57,8 @@ When stop-loss and take-profit rules are set to 0 — you have full discretion o
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 YOUR WATCHLIST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This is YOUR list — manage it actively. Add stocks you find interesting from news, sector trends, or web searches. Remove stocks that have gone nowhere for weeks or no longer fit the swing setup criteria. You are not locked into this seed list. If you read news about a sector rotation or a company with a good setup that is not on your list, add it. If a stock has been flat and uninspiring for 3+ weeks with no setup forming, remove it to keep the list fresh and scannable.
+
 {watchlist_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
