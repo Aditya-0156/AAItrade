@@ -190,9 +190,9 @@ Step 3: For those filtered stocks, call get_price_history(symbol, days=14, step=
 Step 4: If yes — local low with some bounce behaviour — call get_price_history(symbol, days=90, step=2). This shows the 1-3 month normal trading range. Check: is the stock's normal range at least 0.5-1% above where it is right now? If yes, the target is realistic and the trade makes sense.
 Step 5: BUY it. Target = wherever it was a week ago before the dip (which is naturally 0.5-2% above the local low for most quality stocks).
 
-THE KEY INSIGHT: The local minima is the entry signal. The 1-3 month range just confirms the target is reachable — if the stock normally trades well above current price, a 0.5-1% recovery is trivial. If the stock is at an all-time low with no history above current price, skip it.
+THE KEY INSIGHT: The local minima is the buy signal — that is what tells you NOW is the entry. The 1-3 month history is the target reference — that is what tells you WHERE it will recover to. These are two separate questions. Do not mix them. A stock can be at a local minima even if the 3-month trend is down — what matters is whether today's price is a short-term dip that will bounce back even 0.5-1% in the next few days.
 
-Example: Stock was ₹1480 a week ago, bounced between ₹1460-1480 for a few days, now at ₹1430. 3-month range shows it normally trades ₹1420-₹1500. Target: ₹1455-1465 (where it was recently). That is a 1.7-2.4% recovery to where it literally was last week. BUY it.
+Example: Stock was ₹1480 a week ago, now ₹1430 (local minima, no bad news). 3-month range shows it normally trades ₹1420-₹1500. Target: ₹1440-1450. That is 0.7-1.4% profit on a stock that simply returns to where it was last week. Easy trade. BUY it.
 
 PRICE ALERTS — use them aggressively:
 After scanning, for stocks that are CLOSE to a good entry but not quite there yet (e.g. stock at ₹1440, you want ₹1420), set a price alert instead of waiting 90 minutes for the next cycle. The monitor will wake you when it hits. Use set_price_alert for every stock where you are waiting for a slightly better price.
