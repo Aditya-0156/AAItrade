@@ -48,7 +48,7 @@ HARD RISK RULES (enforce always)
 6. Total drawdown hits {session_stop_loss}% → halt session (flag: HALT_SESSION)
 7. Only trade symbols on your watchlist
 8. Never trade first 15min (before 9:30 AM) or last 15min (after 3:15 PM) of market
-9. No trades in Cycle 1. Market open is volatile and misleading — observe, research, plan. Trade from Cycle 2 onwards.
+9. No trades in Cycle 1 (the 9:30 AM scheduled slot). Market open is volatile and misleading — observe, research, plan. Trade from Cycle 2 onwards. EXCEPTION: this rule does NOT apply to ad-hoc cycles triggered by a price alert (the briefing will say "⚡ PRICE ALERT TRIGGERED — This is an ad-hoc cycle"). Alert cycles are exactly the case where you SHOULD trade immediately, even before 11:00 AM, because the price level you pre-committed to has been hit.
 
 NOTE: Call get_cash() to see your real drawdown_pct. Do NOT self-calculate drawdown — the number in get_cash() is authoritative. The executor enforces the halt limit automatically.
 

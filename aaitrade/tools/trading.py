@@ -24,14 +24,21 @@ logger = logging.getLogger(__name__)
 _executor = None
 _session_id: int | None = None
 _cycle_number: int | None = None
+_alert_mode: bool = False  # True during ad-hoc alert-triggered cycles — bypasses the 9:30 slot trade block
 
 
-def set_trading_context(executor, session_id: int, cycle_number: int):
-    """Inject executor + cycle context before each decision cycle."""
-    global _executor, _session_id, _cycle_number
+def set_trading_context(executor, session_id: int, cycle_number: int, alert_mode: bool = False):
+    """Inject executor + cycle context before each decision cycle.
+
+    alert_mode=True when this cycle was triggered by a price alert. The pre-11:00
+    AM observe-only block is skipped in alert mode — the whole point of alerts is
+    to act immediately on a price target hit, including in the morning slot.
+    """
+    global _executor, _session_id, _cycle_number, _alert_mode
     _executor = executor
     _session_id = session_id
     _cycle_number = cycle_number
+    _alert_mode = alert_mode
 
 
 @register_tool(
@@ -93,9 +100,11 @@ def execute_trade(
         return {"status": "error", "reason": "Executor not initialized — cannot execute trade"}
 
     # Hard block: no trades during the 9:30 AM slot (before 11:00 AM IST)
-    # Based on clock time, not cycle_count — so server restarts don't re-trigger this block
+    # Based on clock time, not cycle_count — so server restarts don't re-trigger this block.
+    # Alert-triggered cycles bypass this block — the whole point of alerts is to act on a
+    # price target the moment it hits, including in the morning slot.
     now_ist = datetime.now(_IST)
-    if now_ist.hour == 9 or (now_ist.hour == 10 and now_ist.minute < 59):
+    if not _alert_mode and (now_ist.hour == 9 or (now_ist.hour == 10 and now_ist.minute < 59)):
         return {
             "status": "rejected",
             "reason": (

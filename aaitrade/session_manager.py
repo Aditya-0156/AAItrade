@@ -559,21 +559,26 @@ class SessionManager:
             alert_trigger=triggered_alerts,
         )
 
-        # Inject executor into execute_trade tool
+        # Inject executor into execute_trade tool — alert_mode=True bypasses the
+        # 9:30-AM observe-only block so morning alerts can actually trade.
         from aaitrade.tools.trading import set_trading_context
-        set_trading_context(self.executor, self.session_id, self.cycle_count)
+        set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=True)
 
         # Inject cycle number into price_alerts tools
         from aaitrade.tools.price_alerts import set_alert_context
         set_alert_context(self.session_id, self.cycle_count)
 
         # Get Claude's decisions
-        decisions = self.claude.make_decision(
-            system_prompt=system_prompt,
-            briefing=briefing,
-            session_id=self.session_id,
-            cycle_number=self.cycle_count,
-        )
+        try:
+            decisions = self.claude.make_decision(
+                system_prompt=system_prompt,
+                briefing=briefing,
+                session_id=self.session_id,
+                cycle_number=self.cycle_count,
+            )
+        finally:
+            # Clear alert_mode so subsequent scheduled cycles get the normal gating
+            set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=False)
 
         logger.info(f"Alert cycle: received {len(decisions)} decision(s)")
 
