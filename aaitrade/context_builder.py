@@ -187,7 +187,15 @@ When a position is at a loss:
 - DO NOT SELL in the first 10 market days (Profit Window). Hold patiently. Quality stocks fluctuate — a -5% dip is normal noise.
 - NEVER sell at a loss to "redeploy capital." The stock you sold will recover; the one you redeployed into may dip too. You lose on both.
 - NEVER use "thesis broken," RS_NIFTY going negative, 3M returns negative, or TREND=DOWN as reasons to sell. These are backward-looking. They do not predict the next week.
-- The ONLY reason to sell at a loss: genuine company-specific disaster — fraud, bankruptcy risk, regulatory ban, terrible earnings surprise.
+
+DISTINGUISH CATASTROPHE FROM PANIC — this is one of the most expensive judgment calls you make. Most "bad news" is panic, not catastrophe.
+
+- IMMEDIATE LOSS-EXIT is reserved for TRULY CATASTROPHIC company-specific events that structurally break the business: confirmed fraud, imminent bankruptcy, the company's core operating license being revoked (e.g. a bank losing its banking license, a pharma losing manufacturing approval entirely), or earnings that miss by 30%+ AND are paired with negative forward guidance. These are rare. If you cannot point to a single specific event from this list, it is not catastrophic.
+
+- PANIC NEWS at a loss (regulatory headline scares, a subsidy not being extended, a partial or sector-wide regulatory tightening, a one-off fine, an analyst downgrade, a temporary product recall, sharp -5% to -10% intraday drops on news the company will adapt to within months): the market is OVERREACTING. These dips typically retrace 30-60% within 5-10 trading days as the actual financial impact gets re-priced calmly. Switch the position into an EXTENDED HOLD WINDOW — your new target is exit at breakeven to within -1% loss over the next 10 trading days. Set a price alert near your entry. Do NOT lock in a -3% to -7% loss on a panic dip — the panic is temporary, the loss would be permanent.
+
+- WHEN IN DOUBT, IT IS PANIC, NOT CATASTROPHE. The default is hold. You only exit at a loss when the news genuinely terminates the company's ability to keep operating.
+
 - If you have cash and the stock is at -3% or worse with no bad news, consider averaging down. Apply the visit-frequency test to the new buy — is the current price a demonstrated floor? If yes, buy more and lower your average.
 
 RE-EVALUATE YOUR THESIS EVERY CYCLE:
@@ -289,7 +297,8 @@ Entry discipline:
 - NEVER chase a stock that has already moved 2%+ UP today. You missed it — move on.
 
 Exit discipline:
-- NEVER sell a stock at a loss in the first 10 market days unless company-specific disaster news hits (fraud, bankruptcy, regulatory ban, terrible earnings). Dip + red market + scary indicators are NOT reasons.
+- NEVER sell a stock at a loss in the first 10 market days on PANIC NEWS — regulatory headline scares, subsidy non-renewals, partial bans, one-off fines, analyst downgrades, sector tightening. These reverse 30-60% within 5-10 days. Switch into the EXTENDED HOLD WINDOW (exit at breakeven to -1%) instead.
+- IMMEDIATE loss-exit is reserved for TRULY CATASTROPHIC events only: confirmed fraud, imminent bankruptcy, core operating license revoked entirely, or 30%+ earnings miss with negative forward guidance. When in doubt, it is panic, not catastrophe — hold.
 - NEVER sell at a loss to "redeploy capital." You will lock the loss permanently while both stocks recover.
 - NEVER use "thesis broken," RS_NIFTY negative, 3M returns negative, or TREND=DOWN to justify a loss-sale. These are backward-looking — they do not predict next week.
 - NEVER sit on a profitable position hoping for more. 0.5-1.5% profit → SELL. Do not let a 0.8% win turn into a -0.5% loss.
