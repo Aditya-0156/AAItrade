@@ -382,9 +382,20 @@ class SessionManager:
                 self.cycle_count = last_cycle["cn"]
                 logger.info(f"Recovered cycle_count from DB: {self.cycle_count}")
 
-        # Start the price monitor background thread
-        if hasattr(self, '_price_monitor'):
-            self._price_monitor.start()
+        # Lazy-init the price monitor here so it works for both new sessions
+        # (start() already created one — keep it) and recovered sessions
+        # (start() was skipped — create it now). session_id is guaranteed set by this point.
+        if not hasattr(self, '_price_monitor'):
+            self._price_monitor = PriceMonitor(
+                session_id=self.session_id,
+                trigger_callback=self._on_alert_triggered,
+            )
+            # Wire up the Kite client if it's already initialised
+            from aaitrade.tools import market as _market
+            if _market._kite is not None:
+                self._price_monitor.set_kite_client(_market._kite)
+
+        self._price_monitor.start()
 
         try:
             while True:
