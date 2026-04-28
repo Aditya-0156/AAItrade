@@ -27,26 +27,56 @@ _kite_lock = threading.Lock()
 _kite = None
 # Data source: "yfinance" (default/free) or "kite" (live trading)
 _data_source = "yfinance"
-# Instrument token cache: symbol -> token, built once at startup
+# Instrument caches: symbol -> token / tick_size, built once at startup.
+# Tick size matters for LIMIT orders — Zerodha rejects prices that aren't
+# a multiple of the symbol's tick (₹0.05 for most equity, ₹1.00 for high-priced
+# names like MARUTI/BAJFINANCE).
 _instrument_token_cache: dict[str, int] = {}
+_instrument_tick_cache: dict[str, float] = {}
 
 
 def set_kite_client(kite):
     """Inject the authenticated KiteConnect instance. Switches data source to Kite."""
-    global _kite, _data_source, _instrument_token_cache
+    global _kite, _data_source, _instrument_token_cache, _instrument_tick_cache
     _kite = kite
     _data_source = "kite"
-    # Download all NSE instruments once and cache symbol -> token
+    # Download all NSE instruments once and cache symbol -> token + tick_size
     try:
         instruments = kite.instruments("NSE")
-        _instrument_token_cache = {
-            inst["tradingsymbol"]: inst["instrument_token"]
-            for inst in instruments
-            if inst.get("segment") == "NSE"
-        }
+        _instrument_token_cache = {}
+        _instrument_tick_cache = {}
+        for inst in instruments:
+            if inst.get("segment") != "NSE":
+                continue
+            sym = inst["tradingsymbol"]
+            _instrument_token_cache[sym] = inst["instrument_token"]
+            tick = inst.get("tick_size")
+            _instrument_tick_cache[sym] = float(tick) if tick else 0.05
         logger.info(f"Market data source: Kite Connect ({len(_instrument_token_cache)} NSE instruments cached)")
     except Exception as e:
         logger.warning(f"Could not pre-cache NSE instruments: {e}. Will fetch on demand.")
+
+
+def get_tick_size(symbol: str) -> float:
+    """Return the tick size for a symbol. Defaults to 0.05 (NSE equity default)."""
+    return _instrument_tick_cache.get(symbol, 0.05)
+
+
+def round_to_tick(price: float, symbol: str, direction: str = "down") -> float:
+    """Round a price to a valid Zerodha tick for the given symbol.
+
+    direction='up'   — round up   (use for BUY limit price, ensures order fills above market)
+    direction='down' — round down (use for SELL limit price, ensures order fills below market)
+    """
+    import math
+    tick = get_tick_size(symbol)
+    steps = price / tick
+    if direction == "up":
+        snapped = math.ceil(steps) * tick
+    else:
+        snapped = math.floor(steps) * tick
+    # 4 decimals is enough for any NSE tick (smallest is 0.01)
+    return round(snapped, 4)
 
 
 def set_data_source(source: str):

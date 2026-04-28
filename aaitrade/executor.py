@@ -302,8 +302,11 @@ class Executor:
 
         try:
             # Use LIMIT order slightly above market to ensure immediate fill
-            # (Kite API requires market_protection for MARKET orders but SDK doesn't support it)
-            limit_price = round(price * 1.005, 1)  # 0.5% above current price
+            # (Kite API requires market_protection for MARKET orders but SDK doesn't support it).
+            # Round to the symbol's tick — high-priced stocks like MARUTI use ₹1.00 tick
+            # and Kite rejects prices that aren't a multiple of it.
+            from aaitrade.tools.market import round_to_tick
+            limit_price = round_to_tick(price * 1.005, symbol, direction="up")
             order_id = _kite.place_order(
                 variety=_kite.VARIETY_REGULAR,
                 exchange=_kite.EXCHANGE_NSE,
@@ -546,8 +549,10 @@ class Executor:
             return {"status": "error", "reason": "Kite client not initialized"}
 
         try:
-            # Use LIMIT order slightly below market to ensure immediate fill
-            limit_price = round(price * 0.995, 1)  # 0.5% below current price
+            # Use LIMIT order slightly below market to ensure immediate fill.
+            # Round to the symbol's tick — Kite rejects prices that aren't a multiple of it.
+            from aaitrade.tools.market import round_to_tick
+            limit_price = round_to_tick(price * 0.995, symbol, direction="down")
             order_id = _kite.place_order(
                 variety=_kite.VARIETY_REGULAR,
                 exchange=_kite.EXCHANGE_NSE,
