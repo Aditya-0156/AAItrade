@@ -9,6 +9,7 @@ import type {
   ThesisUpdate,
   SessionMemory,
   DailySummary,
+  PriceAlert,
 } from '../types'
 
 // Sessions
@@ -62,6 +63,17 @@ export const fetchJournalUpdates = (journalId: number) =>
 // Memory
 export const fetchMemory = (sessionId: number) =>
   client.get<SessionMemory>(`/api/memory/${sessionId}`).then((r) => r.data)
+
+// Price alerts
+export const fetchAlerts = (sessionId?: number, status?: string) =>
+  client
+    .get<PriceAlert[]>('/api/alerts', {
+      params: {
+        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(status ? { status } : {}),
+      },
+    })
+    .then((r) => r.data)
 
 // Daily summary
 export const fetchSummary = (sessionId?: number) =>

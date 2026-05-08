@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from api.routers import sessions, trades, portfolio, decisions, tool_calls, journal, summary
+from api.routers import sessions, trades, portfolio, decisions, tool_calls, journal, summary, alerts
 from api.routers import control
 from api.ws.feed import websocket_feed
 
@@ -52,6 +52,7 @@ app.include_router(decisions.router)
 app.include_router(tool_calls.router)
 app.include_router(journal.router)
 app.include_router(summary.router)
+app.include_router(alerts.router)
 
 # Control router (write operations — start/stop/pause/resume/token)
 app.include_router(control.router)

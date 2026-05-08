@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BookOpen, ChevronDown, ChevronUp, Brain, Clock, Tag, Target, Shield } from 'lucide-react'
-import { fetchSessions, fetchJournal, fetchJournalUpdates, fetchMemory } from '../api'
+import { BookOpen, ChevronDown, ChevronUp, Brain, Clock, Tag, Target, Shield, Bell, BellOff, BellRing } from 'lucide-react'
+import { fetchSessions, fetchJournal, fetchJournalUpdates, fetchMemory, fetchAlerts } from '../api'
 import { StatusBadge, ModeBadge } from '../components/shared/StatusBadge'
 import { PnLBadge } from '../components/shared/PnLBadge'
-import type { JournalEntry, ThesisUpdate } from '../types'
+import type { JournalEntry, ThesisUpdate, PriceAlert } from '../types'
 
 function toIST(str: string | null | undefined) {
   if (!str) return '—'
@@ -207,6 +207,114 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
   )
 }
 
+function AlertRow({ alert }: { alert: PriceAlert }) {
+  const isActive = alert.status === 'active'
+  const isTriggered = alert.status === 'triggered'
+
+  const directionLabel = alert.direction === 'above' ? '↑ Above' : '↓ Below'
+  const directionColor = alert.direction === 'above' ? 'text-emerald-400' : 'text-amber-400'
+
+  const statusBadge = isActive
+    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+    : isTriggered
+    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+    : 'bg-gray-500/15 text-gray-500 border-gray-700'
+
+  return (
+    <div className="flex items-start gap-4 px-5 py-3 border-b border-gray-800/50 last:border-b-0">
+      <div className="mt-0.5">
+        {isActive ? (
+          <Bell size={14} className="text-blue-400" />
+        ) : isTriggered ? (
+          <BellRing size={14} className="text-emerald-400" />
+        ) : (
+          <BellOff size={14} className="text-gray-600" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono font-bold text-gray-100">{alert.symbol}</span>
+          <span className={`text-xs font-semibold ${directionColor}`}>{directionLabel}</span>
+          <span className="font-mono text-sm text-gray-200">
+            ₹{alert.target_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+          </span>
+          <span className="text-xs text-gray-600">±{alert.margin_pct}%</span>
+          <span className={`badge border text-xs ${statusBadge}`}>{alert.status}</span>
+        </div>
+        {alert.reason && (
+          <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{alert.reason}</p>
+        )}
+        <div className="text-xs text-gray-700 mt-0.5">
+          Set {toIST(alert.created_at)}
+          {alert.triggered_at && ` · Fired ${toIST(alert.triggered_at)}`}
+          {alert.cycle_number && ` · Cycle ${alert.cycle_number}`}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ActiveAlertsPanel({ sessionId }: { sessionId: number }) {
+  const [showAll, setShowAll] = useState(false)
+
+  const { data: alerts = [], isLoading } = useQuery({
+    queryKey: ['alerts', sessionId, showAll],
+    queryFn: () => fetchAlerts(sessionId, showAll ? undefined : undefined),
+    refetchInterval: 30_000,
+  })
+
+  const active = alerts.filter((a) => a.status === 'active')
+  const triggered = alerts.filter((a) => a.status === 'triggered')
+  const displayed = showAll ? alerts : alerts.filter((a) => a.status === 'active')
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="text-gray-500" />
+          <span className="text-sm font-semibold text-gray-300">Price Alerts</span>
+          {active.length > 0 && (
+            <span className="badge bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs">
+              {active.length} active
+            </span>
+          )}
+          {triggered.length > 0 && (
+            <span className="badge bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs">
+              {triggered.length} fired
+            </span>
+          )}
+        </div>
+        {(triggered.length > 0 || alerts.length > active.length) && (
+          <button
+            onClick={() => setShowAll((v) => !v)}
+            className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+          >
+            {showAll ? 'Active only' : 'Show all'}
+          </button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="card-body">
+          <div className="skeleton h-16 w-full rounded" />
+        </div>
+      ) : displayed.length === 0 ? (
+        <div className="card-body py-8 text-center text-gray-600 text-sm">
+          {alerts.length === 0
+            ? 'No price alerts set. Claude sets these automatically when it spots a setup.'
+            : 'No active alerts — all alerts have fired or were cancelled.'}
+        </div>
+      ) : (
+        <div>
+          {displayed.map((alert) => (
+            <AlertRow key={alert.id} alert={alert} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MemoryViewer({ sessionId }: { sessionId: number }) {
   const { data: memory, isLoading } = useQuery({
     queryKey: ['memory', sessionId],
@@ -305,6 +413,9 @@ export function DeepDive() {
 
       {selectedSession && (
         <>
+          {/* Price alerts */}
+          <ActiveAlertsPanel sessionId={selectedSession.id} />
+
           {/* Session memory */}
           <MemoryViewer sessionId={selectedSession.id} />
 

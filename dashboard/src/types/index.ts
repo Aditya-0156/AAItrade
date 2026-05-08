@@ -126,6 +126,20 @@ export interface DailySummary {
   summary_text: string | null
 }
 
+export interface PriceAlert {
+  id: number
+  session_id: number
+  symbol: string
+  target_price: number
+  direction: 'above' | 'below'
+  margin_pct: number
+  reason: string | null
+  status: 'active' | 'triggered' | 'cancelled'
+  created_at: string
+  triggered_at: string | null
+  cycle_number: number | null
+}
+
 export interface WsEvent {
   type: 'decision' | 'tool_call'
   id: number
