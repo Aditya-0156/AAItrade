@@ -389,12 +389,19 @@ class TradingServer:
         """
         self._ensure_initialized()
 
-        # If token looks like a request_token, exchange it for access_token
-        if len(token) < 50:  # request_tokens are typically 32 chars, access_tokens are longer
+        # Determine if this is a request_token (needs exchange) or access_token (use directly).
+        # Both are ~32 chars so we can't use length. Instead: try it as access_token first;
+        # if Kite rejects it, try exchanging it as a request_token.
+        from kiteconnect import KiteConnect
+        _probe = KiteConnect(api_key="9dz93b78apapfn1l")
+        _probe.set_access_token(token)
+        try:
+            _probe.profile()
+            logger.info("Token validated as access_token directly")
+        except Exception:
+            # Not a valid access_token — try treating it as a request_token to exchange
             try:
-                from kiteconnect import KiteConnect
-                kite = KiteConnect(api_key="9dz93b78apapfn1l")
-                data = kite.generate_session(token, api_secret="071tnt5srh72p63b96mh8s8btw9gogyk")
+                data = _probe.generate_session(token, api_secret="071tnt5srh72p63b96mh8s8btw9gogyk")
                 token = data['access_token']
                 logger.info("Converted request_token to access_token")
             except Exception as e:
