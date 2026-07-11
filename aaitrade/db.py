@@ -72,6 +72,28 @@ def init_db():
     except Exception:
         pass
 
+    # Add charges column to trades (transaction costs: STT, stamp, DP, GST)
+    try:
+        with get_connection() as conn:
+            conn.execute("ALTER TABLE trades ADD COLUMN charges REAL DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+
+    # Ensure lessons table exists (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS lessons ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, "
+                "symbol TEXT, category TEXT NOT NULL, lesson TEXT NOT NULL, "
+                "pnl REAL, created_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lessons_session ON lessons(session_id, id)"
+            )
+    except Exception:
+        pass
+
     # Add risk settings columns if missing
     try:
         with get_connection() as conn:
@@ -119,7 +141,8 @@ CREATE TABLE IF NOT EXISTS trades (
     reason          TEXT,
     confidence      TEXT,
     executed_at     TEXT NOT NULL,
-    pnl             REAL                    -- filled on SELL
+    pnl             REAL,                   -- filled on SELL (net of charges)
+    charges         REAL DEFAULT 0          -- STT + stamp + exchange + DP charges
 );
 
 CREATE TABLE IF NOT EXISTS portfolio (
@@ -251,6 +274,18 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER,                -- null for global lessons
+    symbol          TEXT,
+    category        TEXT NOT NULL,          -- trade_outcome / prediction / insight
+    lesson          TEXT NOT NULL,          -- short, factual, 1-3 sentences
+    pnl             REAL,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lessons_session ON lessons(session_id, id);
 
 CREATE TABLE IF NOT EXISTS price_alerts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

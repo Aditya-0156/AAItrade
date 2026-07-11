@@ -49,6 +49,9 @@ class PriceMonitor:
         self._stop_event = threading.Event()
         self._cycle_running = threading.Event()  # Set when a scheduled cycle is in progress
         self._kite = None
+        # (symbol, kind) -> date fired: each position stop/target wakes Claude
+        # at most once per day so a hovering price doesn't spam ad-hoc cycles
+        self._position_trigger_dates: dict[tuple[str, str], str] = {}
 
     def set_kite_client(self, kite):
         """Inject Kite client for price fetching."""
@@ -131,11 +134,21 @@ class PriceMonitor:
             "WHERE session_id = ? AND status = 'active'",
             (self.session_id,),
         )
-        if not alerts:
+
+        # Open positions with a stop-loss or take-profit are watched automatically —
+        # a breach between cycles must not wait up to 90 minutes for the next slot.
+        positions = db.query(
+            "SELECT symbol, quantity, avg_price, stop_loss_price, take_profit_price "
+            "FROM portfolio WHERE session_id = ? AND quantity > 0 "
+            "AND (stop_loss_price IS NOT NULL OR take_profit_price IS NOT NULL)",
+            (self.session_id,),
+        )
+
+        if not alerts and not positions:
             return
 
-        # Batch-fetch prices for all alerted symbols
-        symbols = list({a["symbol"] for a in alerts})
+        # Batch-fetch prices for all watched symbols in one call
+        symbols = list({a["symbol"] for a in alerts} | {p["symbol"] for p in positions})
         prices = self._fetch_prices(symbols)
         if not prices:
             return
@@ -175,6 +188,42 @@ class PriceMonitor:
                     "reason": alert["reason"],
                     "current_price": current_price,
                     "margin_pct": alert["margin_pct"],
+                })
+
+        # Check position stop-loss / take-profit breaches (auto-watched)
+        today = now.strftime("%Y-%m-%d")
+        for pos in positions:
+            symbol = pos["symbol"]
+            if symbol not in prices:
+                continue
+            current_price = prices[symbol]
+
+            breach = None
+            if pos["stop_loss_price"] and current_price <= pos["stop_loss_price"]:
+                breach = ("stop_loss", pos["stop_loss_price"], "below",
+                          f"AUTO: stop-loss ₹{pos['stop_loss_price']} breached on your "
+                          f"{pos['quantity']}-share position (avg ₹{pos['avg_price']}). "
+                          f"Decide NOW: exit, or hold with explicit reasoning.")
+            elif pos["take_profit_price"] and current_price >= pos["take_profit_price"]:
+                breach = ("take_profit", pos["take_profit_price"], "above",
+                          f"AUTO: take-profit ₹{pos['take_profit_price']} reached on your "
+                          f"{pos['quantity']}-share position (avg ₹{pos['avg_price']}). "
+                          f"Lock in the profit or justify holding.")
+
+            if breach:
+                kind, level, direction, reason = breach
+                if self._position_trigger_dates.get((symbol, kind)) == today:
+                    continue  # already woke Claude for this today
+                self._position_trigger_dates[(symbol, kind)] = today
+                logger.info(f"POSITION {kind.upper()} TRIGGERED: {symbol} @ ₹{current_price} (level ₹{level})")
+                triggered.append({
+                    "id": None,
+                    "symbol": symbol,
+                    "target_price": level,
+                    "direction": direction,
+                    "reason": reason,
+                    "current_price": current_price,
+                    "margin_pct": 0,
                 })
 
         # Fire callback if any alerts triggered

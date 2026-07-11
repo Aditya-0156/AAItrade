@@ -70,6 +70,7 @@ Market Data:
 - get_current_price(symbol) — live price, change %, day high/low
 - get_indicators(symbols) — RSI, MA20, MA50, TREND (UP/DOWN/flat), VOL_R (volume ratio vs average), 1m/3m/6m returns, 52-week high/low, distance from highs, RS_NIFTY (relative strength vs Nifty — positive means outperforming)
 - get_price_history(symbol, days, step) — up to 360 days of OHLCV candles. Use step>1 for long lookbacks (e.g. days=180, step=5 = 36 candles covering 6 months)
+- analyze_levels(symbol, entry_price?, target_price?, position_value?) — ★ THE pre-trade tool. Computes ALL six checks in one call: band position, support/resistance levels with touch counts, entry/target visit-frequency validation, falling-knife detection, and NET profit after charges. Omit entry/target to get suggested levels. Its numbers are computed, not estimated — trust them over your own candle counting.
 - get_market_snapshot() — Nifty 50 and Bank Nifty current state
 - get_global_context() — S&P 500, Nikkei, crude oil, gold, USD/INR, India VIX
 
@@ -97,6 +98,8 @@ Thesis & Memory:
 - get_stock_thesis_summary(symbol) — compact summary when the log is long.
 - get_session_memory() — recall your plan and notes from last cycle
 - update_session_memory(content) — save your plan, observations, and next-cycle goals. Max 2880 chars.
+- save_insight(insight, symbol?) — save a REPEATABLE pattern you noticed (works across sessions, forever). Only generalizable lessons: "X fails when Y". Not routine notes.
+- get_lessons(symbol?, limit?) — recall your track record: automatic win/loss records with theses, your saved insights, prediction scores. Call with a symbol before re-trading a stock you've traded before. The 5 most recent already appear in your briefing.
 
 You may buy additional shares of a stock you already hold — the portfolio automatically recalculates the weighted average price.
 
@@ -123,6 +126,15 @@ India VIX: >20 = elevated fear, be cautious with new entries and size down. 15-2
 FII/DII flows: FII net selling over multiple days = consistent headwind even for strong stocks. DII buying provides floor support but may not reverse a FII-driven selloff. Check get_fiidii_flows for context on who is driving the market.
 
 Always check global context before scanning individual stocks. A technically perfect setup means nothing if FII are in full selloff mode due to global risk-off.
+
+MARKET REGIME (computed for you, first line of every briefing):
+- RISK_ON — normal sizing; dips are buyable.
+- NEUTRAL — normal rules; be selective.
+- RISK_OFF — cut position sizes ~40%, require ALL analyze_levels checks to pass with margin, prefer managing exits over new entries, and expect oversold bounces to fail. Do not fight the regime.
+The regime is derived from VIX level/slope, Nifty vs MA20/50, and overnight US moves. It is context, not a command — but overriding it requires a stated reason.
+
+LEARN FROM YOUR TRACK RECORD:
+Your briefing includes your win rate, average win/loss, charges paid, and recent lessons. If your recent losses share a pattern (same setup type, same regime, same sector), STOP repeating it and save_insight the pattern. Before re-trading a symbol, get_lessons(symbol) — you may have already learned something expensive about it.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THE CORE PHILOSOPHY — READ THIS TWICE
@@ -233,12 +245,13 @@ Step 2 — FILTER FOR DIP CANDIDATES: From the batch results, filter for stocks 
   - Price is within 5% of 52-week low, OR within 3% of the stock's own 1-month low
 Cast a WIDE net here. A stock that's merely flat-to-slightly-down can still be a range-oscillation buy if the range is right.
 
-Step 3 — PULL THE CHART and apply the FIVE-POINT VISIT-FREQUENCY ANALYSIS. For every candidate that passes Step 2, call get_price_history(symbol, days=30, step=1). Then, using your own reasoning, evaluate these 5 data points:
-  (a) CURRENT PRICE — where is it right now?
-  (b) LOCAL BAND (past 14 days) — what is the high and low of the past 14 trading days? Is current price in the bottom third of that band?
-  (c) ENTRY VALIDATION — count how many days in the past 30 the stock closed at or below my intended entry. I want to see at LEAST 3 separate days (not a single isolated spike-down) where the stock has been at this level. If fewer than 3, the level is not a real floor — raise my entry.
-  (d) TARGET VALIDATION — count how many days in the past 30 the stock closed at or above my intended target. I want at LEAST 3. If fewer than 3, the target is unrealistic — lower it to a level with 3+ visits.
-  (e) OSCILLATION SHAPE — look at the 30-day chart. Is the price bouncing around a band (good — buy) or falling in a straight line with no bounces (bad — skip, no floor yet).
+Step 3 — RUN analyze_levels(symbol) on every candidate that passes Step 2. It computes all five data points for you in one call:
+  (a) CURRENT PRICE and 14-day band position (in_bottom_third must be true)
+  (b) supports_30d / resistances_30d — real levels with touch counts (3+ = demonstrated)
+  (c) ENTRY VALIDATION — pass your intended entry; it counts the touches. FAIL = raise your entry to the suggested support.
+  (d) TARGET VALIDATION — pass your intended target; FAIL = lower it to the suggested resistance.
+  (e) SHAPE — OSCILLATING is buyable; FALLING_KNIFE means skip, no floor yet.
+Read the `checklist` field — every line must say PASS before you buy, including the NET PROFIT line (the trade must clear transaction costs). If you disagree with a FAIL, you may pull get_price_history to double-check the raw candles, but the computed counts win over eyeball estimates.
 
 Step 4 — CONFIRM WITH 3-MONTH CONTEXT: Call get_price_history(symbol, days=90, step=2). Confirm the 14-day band is consistent with the 3-month range. A stock that has been ranging ₹1420-₹1500 for 3 months and is now at ₹1430 is a very high-probability buy. A stock that has been in a 3-month downtrend AND today's dip is below its recent low band is a "no" — wait for a bounce confirmation first.
 
@@ -279,6 +292,9 @@ Targets (unchanged):
 - Aim for 0.5-1.5% profit per trade. Take it the moment you have it.
 - Hold for 10 days (profit window), then 5 days (recovery window).
 - Target = a price the stock has visited 3+ times in the past month. Not the absolute high.
+
+TRANSACTION COST FLOOR — know your breakeven:
+Every round trip costs real money: STT 0.1% each side, plus a flat ~₹15.4 DP charge on every sell. On a ₹4,000 position that totals ~₹24 = 0.6% — a "0.5% profit" trade is a NET LOSS at that size. Before every BUY: costs ≈ 0.25% of position + ₹16 flat. Your profit target must clear that with room to spare. Prefer FEWER, LARGER positions (the flat DP charge dilutes as position size grows) over many small ones. A 1% target on a ₹4,000 position nets ~0.4%; the same target on ₹8,000 nets ~0.55%.
 
 Session awareness and memory:
 - Call get_session_memory at the start of each cycle. Treat it as context, not orders. If the market has changed, your plan should change too.
@@ -366,15 +382,22 @@ at the best possible prices. Rules:
 
 BRIEFING_TEMPLATE = """BRIEFING — Cycle {cycle_number}
 
+Market Regime: {regime_line}
+
 Indian Market: {market_snapshot}
 
 Global Markets: {global_context}
 
 Macro/World News: {macro_news}
 
+FII/DII Flows: {fii_dii}{outlook_section}
+
 Watchlist: {watchlist_summary}
 
 Holdings: {open_positions}
+
+Track Record & Lessons:
+{lessons_block}
 
 Stats: {session_stats}{failed_trades_section}{alert_section}
 
@@ -459,6 +482,13 @@ class ContextBuilder:
                           Each dict has: symbol, target_price, direction, reason, current_price
         """
 
+        # Market regime (computed, cached 1h — one line of high-value context)
+        try:
+            from aaitrade.regime import format_regime_line
+            regime_line = format_regime_line()
+        except Exception as e:
+            regime_line = f"UNKNOWN ({e})"
+
         # Market snapshot
         try:
             snapshot = get_market_snapshot()
@@ -500,6 +530,29 @@ class ContextBuilder:
             "ORDER BY fetched_at DESC LIMIT 1",
         )
         macro_news = macro_row["summary"] if macro_row else "No macro news available today."
+
+        # FII/DII flows (from cache only — pre-fetched in pre-market tasks)
+        fii_row = db.query_one(
+            "SELECT summary FROM news_cache "
+            "WHERE category = 'fiidii' AND key = 'daily' "
+            "ORDER BY fetched_at DESC LIMIT 1",
+        )
+        fii_dii = fii_row["summary"] if fii_row else "Not available — call get_fiidii_flows if needed."
+
+        # Next-session outlook from off-day research (weekend/holiday analysis)
+        now_str = datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")
+        outlook_row = db.query_one(
+            "SELECT summary FROM news_cache "
+            "WHERE category = 'outlook' AND key = 'next_session' AND expires_at > ? "
+            "ORDER BY fetched_at DESC LIMIT 1",
+            (now_str,),
+        )
+        outlook_section = ""
+        if outlook_row:
+            outlook_section = (
+                "\n\n🔭 NEXT-SESSION OUTLOOK (from weekend/holiday research — "
+                "verify against live data before acting):\n" + outlook_row["summary"]
+            )
 
         # Watchlist summary (top 10 stocks, rotating by cycle to cover full list)
         watchlist_entries = db.query(
@@ -617,13 +670,24 @@ class ContextBuilder:
                 ]
                 alert_section = "\n\nActive Price Alerts (monitoring between cycles):\n" + "\n".join(alert_lines)
 
+        # Track record + recent lessons (deterministic stats + learning loop)
+        try:
+            from aaitrade.lessons import recent_lessons_block
+            lessons_block = recent_lessons_block(self.session_id)
+        except Exception:
+            lessons_block = "Unavailable."
+
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
+            regime_line=regime_line,
             market_snapshot=market_text,
             global_context=global_context_text,
             macro_news=macro_news,
+            fii_dii=fii_dii,
+            outlook_section=outlook_section,
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,
+            lessons_block=lessons_block,
             session_stats=session_stats,
             failed_trades_section=failed_trades_section,
             alert_section=alert_section,

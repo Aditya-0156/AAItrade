@@ -28,6 +28,32 @@ def set_kite_client(kite):
     _kite = kite
 
 
+# Paper-mode slippage: buys fill slightly above quote, sells slightly below.
+PAPER_SLIPPAGE_PCT = 0.05
+
+
+def transaction_costs(action: str, price: float, quantity: int) -> float:
+    """Approximate Zerodha CNC (delivery) charges for one leg of a trade.
+
+    Brokerage is ₹0 for CNC, but the statutory charges are not:
+    - STT 0.1% of turnover, both sides
+    - NSE exchange charge 0.00297% + SEBI 0.0001%, both sides (plus 18% GST)
+    - Stamp duty 0.015% on the BUY side
+    - DP charge ~₹15.34 per scrip per day on the SELL side — this alone is
+      0.4% on a ₹4,000 position, which is why zero-cost paper P&L was fantasy.
+    """
+    turnover = price * quantity
+    stt = 0.001 * turnover
+    exchange = 0.0000297 * turnover
+    sebi = 0.000001 * turnover
+    gst = 0.18 * (exchange + sebi)
+    if action.upper() == "BUY":
+        stamp = 0.00015 * turnover
+        return round(stt + exchange + sebi + gst + stamp, 2)
+    dp_charge = 15.34
+    return round(stt + exchange + sebi + gst + dp_charge, 2)
+
+
 class Executor:
     """Validates and executes trade decisions."""
 
@@ -35,6 +61,7 @@ class Executor:
         self.config = config
         self.session_id = session_id
         self.rules = config.risk_rules
+        self.charges_enabled = getattr(config, "charges_enabled", True)
 
     def execute(self, decision: dict) -> dict:
         """Validate and execute a Claude decision.
@@ -167,9 +194,17 @@ class Executor:
                 ),
             }
 
-        # 7. Check available cash (free_cash already has deployed amounts subtracted)
-        if trade_value > free_cash:
-            return {"status": "rejected", "reason": f"Insufficient cash: need ₹{trade_value:.2f}, have ₹{free_cash:.2f}"}
+        # 7. Check available cash (free_cash already has deployed amounts subtracted).
+        # Include estimated charges so the account can't go negative on fees.
+        est_charges = transaction_costs("BUY", price, quantity) if self.charges_enabled else 0
+        if trade_value + est_charges > free_cash:
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"Insufficient cash: need ₹{trade_value + est_charges:.2f} "
+                    f"(incl. ~₹{est_charges:.2f} charges), have ₹{free_cash:.2f}"
+                ),
+            }
 
         # 8. Check daily loss limit
         if self._daily_loss_exceeded():
@@ -198,6 +233,8 @@ class Executor:
 
     def _simulate_buy(self, symbol, quantity, price, stop_loss, take_profit, decision) -> dict:
         """Paper mode: record the trade without placing a real order."""
+        charges = transaction_costs("BUY", price, quantity) if self.charges_enabled else 0
+
         # Record trade
         db.insert("trades", {
             "session_id": self.session_id,
@@ -210,6 +247,7 @@ class Executor:
             "reason": decision.get("reason", ""),
             "confidence": decision.get("confidence", ""),
             "executed_at": db.now_iso(),
+            "charges": charges,
         })
 
         # Add to portfolio (or update if adding to existing position)
@@ -239,15 +277,15 @@ class Executor:
             })
 
         trade_value = price * quantity
-        logger.info(f"[PAPER] BUY {symbol} x{quantity} @ ₹{price:.2f} = ₹{trade_value:.2f}")
+        logger.info(f"[PAPER] BUY {symbol} x{quantity} @ ₹{price:.2f} = ₹{trade_value:.2f} (+₹{charges:.2f} charges)")
 
-        # Deduct deployed capital from current_capital so DB reflects free cash
+        # Deduct deployed capital + charges from current_capital so DB reflects free cash
         session_cap = db.query_one(
             "SELECT current_capital FROM sessions WHERE id = ?", (self.session_id,)
         )
         if session_cap:
             db.update("sessions", self.session_id, {
-                "current_capital": round(session_cap["current_capital"] - trade_value, 2),
+                "current_capital": round(session_cap["current_capital"] - trade_value - charges, 2),
             })
 
         # Write or update trade journal after confirmed execution
@@ -289,13 +327,78 @@ class Executor:
             "take_profit": take_profit,
         }
 
+    def _verify_order_fill(self, order_id, fallback_price: float) -> dict:
+        """Poll an order until it reaches a terminal state or times out.
+
+        Returns {"status": "COMPLETE"|"REJECTED"|"CANCELLED"|"PENDING",
+                 "average_price": float, "filled_quantity": int, "message": str}.
+
+        CRITICAL: the old code fell through to "executed" when the order was
+        still OPEN after 5s (or every status poll errored). The DB then showed
+        shares that were never bought — phantom positions. Never assume a fill.
+        """
+        import time
+        last: dict = {}
+        for _ in range(10):  # up to ~20s for the limit order to fill
+            time.sleep(2)
+            try:
+                history = _kite.order_history(order_id)
+                if history:
+                    last = history[-1]
+                    status = last.get("status")
+                    if status == "COMPLETE":
+                        return {
+                            "status": "COMPLETE",
+                            "average_price": last.get("average_price") or fallback_price,
+                            "filled_quantity": last.get("filled_quantity") or 0,
+                            "message": "",
+                        }
+                    if status in ("REJECTED", "CANCELLED"):
+                        return {
+                            "status": status,
+                            "average_price": last.get("average_price") or fallback_price,
+                            "filled_quantity": last.get("filled_quantity") or 0,
+                            "message": last.get("status_message", "Unknown"),
+                        }
+            except Exception as e:
+                logger.warning(f"Order status poll failed for {order_id}: {e}")
+        return {
+            "status": "PENDING",
+            "average_price": last.get("average_price") or fallback_price,
+            "filled_quantity": last.get("filled_quantity") or 0,
+            "message": "Order not filled within timeout",
+        }
+
+    def _cancel_and_recheck(self, order_id, fallback_price: float) -> dict:
+        """Cancel a stuck order, then check once more (it may have filled in the race)."""
+        import time
+        try:
+            _kite.cancel_order(variety=_kite.VARIETY_REGULAR, order_id=order_id)
+        except Exception as e:
+            logger.warning(f"Cancel failed for {order_id} (may have filled): {e}")
+        time.sleep(2)
+        try:
+            history = _kite.order_history(order_id)
+            if history:
+                last = history[-1]
+                return {
+                    "status": last.get("status", "UNKNOWN"),
+                    "average_price": last.get("average_price") or fallback_price,
+                    "filled_quantity": last.get("filled_quantity") or 0,
+                    "message": last.get("status_message", ""),
+                }
+        except Exception as e:
+            logger.error(f"Final order check failed for {order_id}: {e}")
+        return {"status": "UNKNOWN", "average_price": fallback_price, "filled_quantity": 0, "message": "status unknown"}
+
     def _live_buy(self, symbol, quantity, price, stop_loss, take_profit, decision) -> dict:
         """Live mode: place real order via Zerodha Kite.
 
         Safety protocol:
         1. Place the order on Kite
-        2. Wait and verify the order status
-        3. Only update DB after confirmed execution
+        2. Poll until COMPLETE / REJECTED / CANCELLED (never assume)
+        3. If stuck OPEN past timeout: cancel, re-check, record only what filled
+        4. Only update DB with confirmed fills
         """
         if not _kite:
             return {"status": "error", "reason": "Kite client not initialized for live trading"}
@@ -318,25 +421,39 @@ class Executor:
                 price=limit_price,
             )
 
-            # Verify order status before updating DB
-            import time
-            actual_price = price
-            for _ in range(5):
-                time.sleep(1)
-                try:
-                    order_history = _kite.order_history(order_id)
-                    if order_history:
-                        latest = order_history[-1]
-                        if latest.get("status") == "COMPLETE":
-                            actual_price = latest.get("average_price", price)
-                            break
-                        elif latest.get("status") in ("REJECTED", "CANCELLED"):
-                            logger.error(f"Live BUY REJECTED for {symbol}: {latest.get('status_message', 'Unknown')}")
-                            return {"status": "error", "reason": f"Order rejected: {latest.get('status_message', 'Unknown')}"}
-                except Exception:
-                    pass
+            verify = self._verify_order_fill(order_id, limit_price)
+
+            if verify["status"] in ("REJECTED", "CANCELLED") and verify["filled_quantity"] == 0:
+                logger.error(f"Live BUY {verify['status']} for {symbol}: {verify['message']}")
+                return {"status": "error", "reason": f"Order {verify['status'].lower()}: {verify['message']}"}
+
+            if verify["status"] == "PENDING":
+                verify = self._cancel_and_recheck(order_id, limit_price)
+                if verify["status"] != "COMPLETE" and verify["filled_quantity"] == 0:
+                    logger.error(
+                        f"Live BUY for {symbol} did not fill (final status: {verify['status']}). "
+                        "Order cancelled — DB NOT updated."
+                    )
+                    return {
+                        "status": "error",
+                        "reason": (
+                            f"BUY {symbol} not filled within timeout — order cancelled. "
+                            "No position was opened. Consider a slightly higher limit or retry."
+                        ),
+                    }
+
+            # Partial fill: record only the quantity that actually filled
+            if 0 < verify["filled_quantity"] < quantity:
+                logger.warning(
+                    f"Live BUY {symbol}: partial fill {verify['filled_quantity']}/{quantity}. "
+                    "Recording filled quantity only."
+                )
+                quantity = verify["filled_quantity"]
+
+            actual_price = verify["average_price"]
 
             # Order confirmed — update DB
+            charges = transaction_costs("BUY", actual_price, quantity) if self.charges_enabled else 0
             db.insert("trades", {
                 "session_id": self.session_id,
                 "symbol": symbol,
@@ -348,6 +465,7 @@ class Executor:
                 "reason": decision.get("reason", ""),
                 "confidence": decision.get("confidence", ""),
                 "executed_at": db.now_iso(),
+                "charges": charges,
             })
 
             # Add to portfolio (or update existing)
@@ -377,14 +495,14 @@ class Executor:
                     "opened_at": db.now_iso(),
                 })
 
-            # Deduct from free cash
+            # Deduct trade value + charges from free cash (matches broker debit)
             trade_value = actual_price * quantity
             session_cap = db.query_one(
                 "SELECT current_capital FROM sessions WHERE id = ?", (self.session_id,)
             )
             if session_cap:
                 db.update("sessions", self.session_id, {
-                    "current_capital": round(session_cap["current_capital"] - trade_value, 2),
+                    "current_capital": round(session_cap["current_capital"] - trade_value - charges, 2),
                 })
 
             # Write or update trade journal after confirmed execution
@@ -471,7 +589,11 @@ class Executor:
             return self._live_sell(symbol, quantity, price, pnl, position, decision)
 
     def _simulate_sell(self, symbol, quantity, price, pnl, position, decision) -> dict:
-        """Paper mode sell."""
+        """Sell bookkeeping — used by paper mode directly and by live mode
+        after the order is confirmed filled. P&L is net of sell-side charges."""
+        charges = transaction_costs("SELL", price, quantity) if self.charges_enabled else 0
+        pnl = (price - position["avg_price"]) * quantity - charges
+
         # Record trade
         db.insert("trades", {
             "session_id": self.session_id,
@@ -483,6 +605,7 @@ class Executor:
             "confidence": decision.get("confidence", ""),
             "executed_at": db.now_iso(),
             "pnl": round(pnl, 2),
+            "charges": charges,
         })
 
         # Update portfolio
@@ -504,12 +627,12 @@ class Executor:
             if pnl > 0:
                 reinvest_ratio = session.get("profit_reinvest_ratio", 0.5) if session else 0.5
                 secure = pnl * (1 - reinvest_ratio)
-                # Return cost_basis + reinvested portion of profit to free cash
+                # Return cost_basis + reinvested portion of (net) profit to free cash
                 new_capital = session["current_capital"] + cost_basis + (pnl * reinvest_ratio)
                 new_secured = session["secured_profit"] + secure
             else:
-                # Loss: return only what the sale actually brought in
-                new_capital = session["current_capital"] + (price * quantity)
+                # Loss: return the net proceeds (sale value minus charges)
+                new_capital = session["current_capital"] + (price * quantity) - charges
 
             db.update("sessions", self.session_id, {
                 "current_capital": round(new_capital, 2),
@@ -529,6 +652,18 @@ class Executor:
                 "exit_price": price,
                 "pnl": round(pnl, 2),
             })
+
+        # Learning loop: every fully-closed trade leaves a lesson for future cycles
+        if remaining <= 0:
+            try:
+                from aaitrade.lessons import record_trade_lesson
+                record_trade_lesson(
+                    self.session_id, symbol,
+                    {"avg_price": position["avg_price"], "quantity": quantity},
+                    price, pnl, decision.get("reason", ""),
+                )
+            except Exception as e:
+                logger.warning(f"Lesson recording failed for {symbol}: {e}")
 
         logger.info(f"[PAPER] SELL {symbol} x{quantity} @ ₹{price:.2f} | P&L: ₹{pnl:.2f}")
         return {
@@ -564,32 +699,45 @@ class Executor:
                 price=limit_price,
             )
 
-            # Verify order status before updating DB
-            import time
-            actual_price = price
-            for _ in range(5):
-                time.sleep(1)
-                try:
-                    order_history = _kite.order_history(order_id)
-                    if order_history:
-                        latest = order_history[-1]
-                        if latest.get("status") == "COMPLETE":
-                            actual_price = latest.get("average_price", price)
-                            break
-                        elif latest.get("status") in ("REJECTED", "CANCELLED"):
-                            logger.error(f"Live SELL REJECTED for {symbol}: {latest.get('status_message', 'Unknown')}")
-                            return {"status": "error", "reason": f"Order rejected: {latest.get('status_message', 'Unknown')}"}
-                except Exception:
-                    pass
+            verify = self._verify_order_fill(order_id, limit_price)
+
+            if verify["status"] in ("REJECTED", "CANCELLED") and verify["filled_quantity"] == 0:
+                logger.error(f"Live SELL {verify['status']} for {symbol}: {verify['message']}")
+                return {"status": "error", "reason": f"Order {verify['status'].lower()}: {verify['message']}"}
+
+            if verify["status"] == "PENDING":
+                verify = self._cancel_and_recheck(order_id, limit_price)
+                if verify["status"] != "COMPLETE" and verify["filled_quantity"] == 0:
+                    logger.error(
+                        f"Live SELL for {symbol} did not fill (final status: {verify['status']}). "
+                        "Order cancelled — position unchanged in DB."
+                    )
+                    return {
+                        "status": "error",
+                        "reason": (
+                            f"SELL {symbol} not filled within timeout — order cancelled. "
+                            "Position unchanged. Retry with a slightly lower limit if urgent."
+                        ),
+                    }
+
+            # Partial fill: record only what actually sold
+            if 0 < verify["filled_quantity"] < quantity:
+                logger.warning(
+                    f"Live SELL {symbol}: partial fill {verify['filled_quantity']}/{quantity}. "
+                    "Recording filled quantity only."
+                )
+                quantity = verify["filled_quantity"]
+
+            actual_price = verify["average_price"]
 
             # Recalculate P&L with actual execution price
             actual_pnl = (actual_price - position["avg_price"]) * quantity
 
-            # Record trade and update portfolio (using actual price)
-            self._simulate_sell(symbol, quantity, actual_price, actual_pnl, position, decision)
+            # Record trade and update portfolio (recomputes P&L net of charges)
+            book = self._simulate_sell(symbol, quantity, actual_price, actual_pnl, position, decision)
 
             logger.info(f"[LIVE] SELL {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
-            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price, "pnl": round(actual_pnl, 2)}
+            return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price, "pnl": book.get("pnl")}
 
         except Exception as e:
             logger.error(f"Live SELL failed for {symbol}: {e}")

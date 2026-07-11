@@ -394,11 +394,33 @@ def _get_nifty_returns() -> dict[str, float | None]:
         return {}
 
 
+# Short-TTL history cache for indicator computation — avoids re-downloading
+# 260 candles per symbol when the same symbol is checked repeatedly within a
+# cycle. TTL is under one cycle gap so each cycle still sees fresh prices.
+_INDICATOR_CACHE_TTL_SECONDS = 45 * 60
+_indicator_history_cache: dict[str, tuple[float, dict]] = {}
+_indicator_cache_lock = threading.Lock()
+
+
+def _get_history_cached(symbol: str) -> dict:
+    import time as _time
+    now = _time.monotonic()
+    with _indicator_cache_lock:
+        cached = _indicator_history_cache.get(symbol)
+        if cached and now - cached[0] < _INDICATOR_CACHE_TTL_SECONDS:
+            return cached[1]
+    history = get_price_history(symbol, days=260)
+    if "error" not in history:
+        with _indicator_cache_lock:
+            _indicator_history_cache[symbol] = (now, history)
+    return history
+
+
 def _compute_indicators_one(symbol: str) -> dict:
     """Compute indicators for a single symbol. Returns a dict or error dict."""
     try:
         # Fetch 260 days internally for 52-week data and 6-month returns
-        history = get_price_history(symbol, days=260)
+        history = _get_history_cached(symbol)
         if "error" in history:
             return {"symbol": symbol, "error": history["error"]}
 
@@ -493,27 +515,31 @@ def _compute_indicators_one(symbol: str) -> dict:
 @register_tool(
     name="get_indicators",
     description=(
-        "Get technical indicators + trend context for up to 5 NSE stocks: RSI(14), "
+        "Get technical indicators + trend context for up to 15 NSE stocks: RSI(14), "
         "MA20, MA50, MA trend (UP/DOWN/flat), volume ratio, 1m/3m/6m returns, "
         "52-week high/low with % distance, and relative strength vs Nifty. "
         "ALWAYS check TREND and RET_3M/RET_6M before playing an oversold bounce — "
         "a stock in a sustained downtrend (TREND=DOWN, negative 3m/6m) may be a falling knife. "
-        "Returns a compact table — one row per symbol. Batch multiple symbols."
+        "Returns a compact table — one row per symbol. Batch your full scan list "
+        "(10-15 symbols) in ONE call instead of multiple small calls."
     ),
     parameters={
         "properties": {
             "symbols": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of NSE symbols, e.g. ['RELIANCE', 'INFY', 'TCS']. Max 5.",
+                "description": "List of NSE symbols, e.g. ['RELIANCE', 'INFY', 'TCS']. Max 15.",
             },
         },
         "required": ["symbols"],
     },
 )
 def get_indicators(symbols: list) -> dict:
-    symbols = symbols[:5]
-    rows = [_compute_indicators_one(s) for s in symbols]
+    symbols = symbols[:15]
+    # Parallel fetch — sequential downloads of 15 × 260 candles are too slow
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        rows = list(pool.map(_compute_indicators_one, symbols))
 
     # Compact pipe-table with trend context
     header = "SYMBOL|PRICE|RSI|RSI_SIG|MA20|MA50|TREND|VOL_R|VOL_SIG|RET_1M|RET_3M|RET_6M|52W_HI|%_FR_HI|52W_LO|RS_NIFTY"
@@ -541,7 +567,7 @@ def get_indicators(symbols: list) -> dict:
 @register_tool(
     name="get_multiple_prices",
     description=(
-        "Get current live quotes for up to 5 NSE stocks at once. More efficient "
+        "Get current live quotes for up to 15 NSE stocks at once. More efficient "
         "than calling get_current_price multiple times. Returns a dict with "
         "symbol keys, each containing last_price, change_percent, etc."
     ),
@@ -550,14 +576,14 @@ def get_indicators(symbols: list) -> dict:
             "symbols": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of NSE symbols (e.g. ['RELIANCE', 'INFY', 'TCS']). Max 5.",
+                "description": "List of NSE symbols (e.g. ['RELIANCE', 'INFY', 'TCS']). Max 15.",
             },
         },
         "required": ["symbols"],
     },
 )
 def get_multiple_prices(symbols: list[str]) -> dict:
-    symbols = symbols[:5]  # Hard cap at 5
+    symbols = symbols[:15]  # Hard cap at 15
     results = {}
     if _data_source == "kite" and _kite:
         # Batch Kite quote — single API call for all symbols
@@ -589,9 +615,11 @@ def get_multiple_prices(symbols: list[str]) -> dict:
             for symbol in symbols:
                 results[symbol] = {"error": str(e), "symbol": symbol}
     else:
-        # Fallback: call individually for yfinance
-        for symbol in symbols:
-            results[symbol] = get_current_price(symbol)
+        # Fallback: yfinance in parallel (sequential is too slow for 15 symbols)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            for symbol, quote in zip(symbols, pool.map(get_current_price, symbols)):
+                results[symbol] = quote
 
     results["timestamp"] = datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S")
     return results

@@ -35,10 +35,12 @@ class TestRegistration:
             "search_web",
             "get_portfolio", "get_cash",
             "get_trade_history", "get_session_summary",
-            "write_trade_rationale", "get_open_positions_with_rationale",
+            "get_open_positions_with_rationale",
             "update_thesis", "get_closed_trade_history",
             "get_watchlist",
             "get_session_memory", "update_session_memory",
+            "analyze_levels", "save_insight", "get_lessons",
+            "execute_trade", "set_price_alert",
         }
         registered = set(_REGISTRY.keys())
         assert expected.issubset(registered)

@@ -288,22 +288,23 @@ class TelegramBot:
             self.send("Usage: /token <kite\\_access\\_token>")
             return
 
-        # Update env
-        os.environ["KITE_ACCESS_TOKEN"] = token
-
-        # Update live Kite client immediately — no restart needed
         try:
-            from aaitrade.tools.market import _kite, set_kite_client
-            if _kite is not None:
-                _kite.set_access_token(token)
-                # Rebuild instrument cache with fresh token
-                set_kite_client(_kite)
-                self.send("\u2705 Kite token updated and applied live — no restart needed.")
+            # If the dashboard server is running, route through it — it also
+            # refreshes price monitors and recovers sessions blocked on a bad token.
+            from aaitrade import server as _server_mod
+            if _server_mod._server is not None:
+                result = _server_mod._server.update_kite_token(token)
             else:
-                self.send("\u2705 Kite token saved. Kite client not active yet — will apply on next start.")
-            logger.info("Kite access token updated live via Telegram")
+                from aaitrade.kite_auth import apply_kite_token
+                result = apply_kite_token(token)
+
+            if result.get("status") == "ok":
+                self.send(f"\u2705 {result.get('message', 'Kite token updated.')}", parse_mode=None)
+                logger.info("Kite access token updated live via Telegram")
+            else:
+                self.send(f"\u26a0\ufe0f Token update failed: {result.get('message')}", parse_mode=None)
         except Exception as e:
-            self.send(f"\u26a0\ufe0f Token saved but live update failed: {e}")
+            self.send(f"\u26a0\ufe0f Token update failed: {e}", parse_mode=None)
             logger.error(f"Live token update failed: {e}")
 
     def _cmd_feed(self, args: str):

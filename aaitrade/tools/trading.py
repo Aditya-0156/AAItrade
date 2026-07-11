@@ -104,13 +104,26 @@ def execute_trade(
     # Alert-triggered cycles bypass this block — the whole point of alerts is to act on a
     # price target the moment it hits, including in the morning slot.
     now_ist = datetime.now(_IST)
-    if not _alert_mode and (now_ist.hour == 9 or (now_ist.hour == 10 and now_ist.minute < 59)):
+    if not _alert_mode and now_ist.hour in (9, 10):
         return {
             "status": "rejected",
             "reason": (
                 "The 9:30 AM market open slot is observe-only (before 11:00 AM IST). "
                 "Market open is volatile and misleading — use this time to research, "
                 "scan indicators, read news, and build your plan. Trade from 11:00 AM onwards."
+            ),
+        }
+
+    # Hard block: last 15 minutes of market (after 3:15 PM IST). This rule was
+    # previously prompt-only — now enforced. EOD stop-loss exits bypass this
+    # (they call executor.execute directly, not this tool).
+    if now_ist.hour > 15 or (now_ist.hour == 15 and now_ist.minute >= 15):
+        return {
+            "status": "rejected",
+            "reason": (
+                "No trades in the last 15 minutes of market (after 3:15 PM IST). "
+                "Closing auction volatility gives bad fills. Set a price alert "
+                "for tomorrow instead."
             ),
         }
 

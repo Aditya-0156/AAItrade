@@ -156,8 +156,17 @@ class SessionConfig:
     decision_interval_minutes: int = 90  # 4 cycles/day: ~9:30, ~11:00, ~12:30, ~14:00
     max_tool_calls_per_cycle: int = 30
     max_web_searches_per_cycle: int = 5   # No hard limit in prompt — Claude decides
-    model: str = "claude-haiku-4-5-20251001"  # Default Haiku for cost (~73% cheaper); override per-session if needed
+    model: str = "claude-haiku-4-5-20251001"  # Execution cycles: Haiku (cheap, mechanical work)
+    # Planning model: used for the 9:30 AM observe/plan cycle and weekend
+    # research — the two places where reasoning depth actually pays. One
+    # Sonnet planning cycle/day costs roughly as much as the other three
+    # Haiku cycles combined; set equal to `model` to disable tiering.
+    planning_model: str = "claude-sonnet-5"
     profit_reinvest_ratio: float = 0.5  # 0.0=secure all profit, 1.0=reinvest all profit
+    # Apply realistic Zerodha CNC charges (STT, stamp, DP, slippage) to paper
+    # trades. Without this, paper P&L overstates reality — the 0.5-1% profit
+    # targets get materially eaten by ~0.25-0.5% round-trip costs on small trades.
+    charges_enabled: bool = True
 
     # Derived
     risk_rules: RiskRules = field(init=False)

@@ -54,7 +54,15 @@ def is_trading_day(check_date: date | None = None) -> bool:
         return False
 
     # Holidays
-    year_holidays = _HOLIDAYS.get(check_date.year, [])
+    year_holidays = _HOLIDAYS.get(check_date.year)
+    if year_holidays is None:
+        # No calendar for this year — every weekday looks like a trading day,
+        # so the system would try to trade on NSE holidays. Loud warning.
+        logger.warning(
+            f"No NSE holiday calendar loaded for {check_date.year}! "
+            f"Add it to holidays.py — until then holidays are treated as trading days."
+        )
+        year_holidays = []
     if check_date in year_holidays:
         logger.info(f"{check_date} is an NSE holiday")
         return False

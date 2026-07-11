@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 _HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
 _HF_TOKEN: str | None = None
-_SUMMARIZE_THRESHOLD = 800  # chars — summarize if tool output exceeds this
+# Raised from 800 — at 800 the BART model was mangling structured tool output
+# (JSON in, garbage out) and truncation was destroying search results Claude
+# actually needed. News/search outputs are usually well under this anyway.
+_SUMMARIZE_THRESHOLD = 3500  # chars — summarize if tool output exceeds this
 
 
 def init_summarizer(token: str | None = None):

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,12 @@ logger = logging.getLogger(__name__)
 # Interval = 90 minutes between cycles to cover the 9:30-15:15 window
 DEFAULT_CYCLE_INTERVAL_MINUTES = 90
 
+# Global cycle lock — tool modules hold per-session context in module globals,
+# so only ONE session's decision cycle may run at a time across all threads.
+# Without this, session A's tool calls can silently execute against session B's
+# ID when the server runs multiple sessions (or an alert cycle interleaves).
+_CYCLE_LOCK = threading.Lock()
+
 
 class SessionManager:
     """Manages a complete trading session."""
@@ -51,6 +58,8 @@ class SessionManager:
         self.cycle_count = 0
         self._recovered = False  # set True by multi_session recovery
         self._eod_done_date: str | None = None  # guard: run EOD at most once per calendar day
+        self._premarket_done_date: str | None = None  # guard: pre-market tasks once per day
+        self._research_done_date: str | None = None   # guard: weekend research once per day
 
     def start(self):
         """Initialize and start a new trading session."""
@@ -309,7 +318,14 @@ class SessionManager:
         last_run_dt = None
         if last_run and last_run["last"]:
             try:
-                last_run_dt = datetime.fromisoformat(last_run["last"]).astimezone(_IST)
+                # DB timestamps are naive IST strings (db.now_iso). Attach IST
+                # directly — .astimezone() would wrongly assume system-local time
+                # (e.g. UTC on the server), shifting comparisons by 5.5 hours.
+                last_run_dt = datetime.fromisoformat(last_run["last"])
+                if last_run_dt.tzinfo is None:
+                    last_run_dt = last_run_dt.replace(tzinfo=_IST)
+                else:
+                    last_run_dt = last_run_dt.astimezone(_IST)
             except Exception:
                 pass
 
@@ -340,21 +356,33 @@ class SessionManager:
 
         return None
 
-    def _seconds_until_next_slot(self, now: datetime) -> int:
-        """Return seconds to sleep until the next cycle slot or market open."""
-        today = now.date()
+    def _seconds_until_next_event(self, now: datetime) -> int:
+        """Return seconds until the next scheduled event.
 
-        # Find next slot today
+        Events, in daily order: cycle slots (9:30/11:00/12:30/14:00),
+        end-of-day processing (15:30), and tomorrow's pre-market (8:55).
+        Previously this only knew about cycle slots — after the 14:00 slot it
+        slept straight to the next morning, so EOD processing NEVER ran.
+        """
+        today_str = now.strftime("%Y-%m-%d")
+        candidates: list[tuple[datetime, str]] = []
+
         for h, m in self.CYCLE_SLOTS:
             slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
             if slot_time > now:
-                secs = int((slot_time - now).total_seconds())
-                logger.info(f"Sleeping {secs // 60}m {secs % 60}s until next cycle slot ({h:02d}:{m:02d} IST)...")
-                return max(secs, 1)
+                candidates.append((slot_time, f"cycle slot {h:02d}:{m:02d}"))
 
-        # All slots done today — sleep until tomorrow 9:00 AM
-        logger.info("All cycles done for today. Sleeping until tomorrow 9:00 AM IST...")
-        return self._sleep_until_tomorrow(dry_run=True)
+        eod_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if eod_time > now and self._eod_done_date != today_str:
+            candidates.append((eod_time, "end-of-day processing"))
+
+        tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+        candidates.append((tomorrow_morning, "tomorrow pre-market"))
+
+        next_time, label = min(candidates, key=lambda c: c[0])
+        secs = max(int((next_time - now).total_seconds()), 1)
+        logger.info(f"Sleeping {secs // 3600}h {(secs % 3600) // 60}m until {label} ({next_time.strftime('%H:%M IST')})")
+        return secs
 
     def run(self):
         """Run the trading session — the main loop.
@@ -423,38 +451,31 @@ class SessionManager:
                 is_closing = (status == "closing")
                 now = datetime.now(_IST)
 
-                # Holiday/weekend check
+                # Holiday/weekend check — but weekends aren't dead time:
+                # run the research cycle in the evening to build next-session outlook
                 if not is_trading_day(now.date()):
-                    logger.info(f"{now.date()} is not a trading day (IST). Sleeping until tomorrow...")
-                    self._sleep_until_tomorrow()
+                    self._maybe_run_offday_research(now)
+                    research_time = now.replace(hour=17, minute=30, second=0, microsecond=0)
+                    if now < research_time and self._research_done_date != now.strftime("%Y-%m-%d"):
+                        target = research_time
+                        label = "off-day research (17:30 IST)"
+                    else:
+                        target = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
+                        label = "tomorrow pre-market"
+                    secs = max(int((target - now).total_seconds()), 60)
+                    logger.info(f"{now.date()} is not a trading day (IST). Sleeping until {label}...")
+                    self._interruptible_sleep(secs)
                     continue
 
-                # Pre-market: fetch macro news + portfolio sync at 9:00-9:05 AM IST
-                if now.hour == 9 and now.minute < 5:
-                    logger.info("Pre-market: fetching macro news...")
-                    try:
-                        get_macro_news()
-                    except Exception as e:
-                        logger.error(f"Macro news fetch failed: {e}")
+                # Pre-market tasks: token health check, macro news, FII/DII prefetch,
+                # portfolio sync. Guarded to once per day; runs on any wake after 8:30
+                # (including restarts mid-day), not just a narrow 9:00-9:05 window.
+                if now.hour >= 8 and not (now.hour == 8 and now.minute < 30):
+                    self._pre_market_tasks(now)
 
-                    if self.config.execution_mode == ExecutionMode.LIVE:
-                        try:
-                            from aaitrade.portfolio_sync import sync_portfolio_with_kite
-                            from aaitrade.tools.market import _kite
-                            if _kite:
-                                sync_result = sync_portfolio_with_kite(self.session_id, _kite)
-                                if sync_result.get("discrepancies"):
-                                    bot = get_bot()
-                                    if bot:
-                                        n = len(sync_result["discrepancies"])
-                                        bot.send(f"📊 Portfolio sync: {n} discrepancy(ies) corrected")
-                        except Exception as e:
-                            logger.error(f"Portfolio sync failed: {e}")
-
-                # End-of-day: after 3:30 PM
+                # End-of-day: any time after 15:30 (once per day, guarded in _end_of_day)
                 eod_start = now.replace(hour=15, minute=30, second=0, microsecond=0)
-                eod_end   = now.replace(hour=15, minute=45, second=0, microsecond=0)
-                if eod_start <= now <= eod_end:
+                if now >= eod_start:
                     try:
                         self._end_of_day()
                     except Exception as e:
@@ -494,10 +515,10 @@ class SessionManager:
                         if hasattr(self, '_price_monitor'):
                             self._price_monitor.notify_cycle_end()
 
-                # Sleep until next slot (or tomorrow if all slots done)
+                # Sleep until the next event (cycle slot, EOD, or tomorrow pre-market)
                 now = datetime.now(_IST)
-                sleep_seconds = self._seconds_until_next_slot(now)
-                time.sleep(sleep_seconds)
+                sleep_seconds = self._seconds_until_next_event(now)
+                self._interruptible_sleep(sleep_seconds)
 
         except KeyboardInterrupt:
             logger.info("Session interrupted by user.")
@@ -547,38 +568,42 @@ class SessionManager:
         if not session_check or session_check["status"] not in ("active", "closing"):
             return
 
-        is_closing = session_check["status"] == "closing"
-        self.cycle_count += 1
-        logger.info(f"{'─' * 40}")
-        logger.info(f"Alert-triggered cycle {self.cycle_count}")
+        with _CYCLE_LOCK:
+            is_closing = session_check["status"] == "closing"
+            self.cycle_count += 1
+            logger.info(f"{'─' * 40}")
+            logger.info(f"Alert-triggered cycle {self.cycle_count}")
 
-        # Build system prompt and briefing with alert context
-        system_prompt = self.context.build_system_prompt(closing_mode=is_closing)
-        briefing = self.context.build_briefing(
-            self.cycle_count,
-            alert_trigger=triggered_alerts,
-        )
+            # Point all shared tool modules at this session before any tool runs
+            self._set_tool_context()
 
-        # Inject executor into execute_trade tool — alert_mode=True bypasses the
-        # 9:30-AM observe-only block so morning alerts can actually trade.
-        from aaitrade.tools.trading import set_trading_context
-        set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=True)
-
-        # Inject cycle number into price_alerts tools
-        from aaitrade.tools.price_alerts import set_alert_context
-        set_alert_context(self.session_id, self.cycle_count)
-
-        # Get Claude's decisions
-        try:
-            decisions = self.claude.make_decision(
-                system_prompt=system_prompt,
-                briefing=briefing,
-                session_id=self.session_id,
-                cycle_number=self.cycle_count,
+            # Build system prompt and briefing with alert context
+            system_prompt = self.context.build_system_prompt(closing_mode=is_closing)
+            briefing = self.context.build_briefing(
+                self.cycle_count,
+                alert_trigger=triggered_alerts,
             )
-        finally:
-            # Clear alert_mode so subsequent scheduled cycles get the normal gating
-            set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=False)
+
+            # Inject executor into execute_trade tool — alert_mode=True bypasses the
+            # 9:30-AM observe-only block so morning alerts can actually trade.
+            from aaitrade.tools.trading import set_trading_context
+            set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=True)
+
+            # Inject cycle number into price_alerts tools
+            from aaitrade.tools.price_alerts import set_alert_context
+            set_alert_context(self.session_id, self.cycle_count)
+
+            # Get Claude's decisions
+            try:
+                decisions = self.claude.make_decision(
+                    system_prompt=system_prompt,
+                    briefing=briefing,
+                    session_id=self.session_id,
+                    cycle_number=self.cycle_count,
+                )
+            finally:
+                # Clear alert_mode so subsequent scheduled cycles get the normal gating
+                set_trading_context(self.executor, self.session_id, self.cycle_count, alert_mode=False)
 
         logger.info(f"Alert cycle: received {len(decisions)} decision(s)")
 
@@ -660,15 +685,122 @@ class SessionManager:
         self.cycle_count = snapshot["cycle_count"]
         logger.info("State snapshot restored")
 
-    def _sleep_until_tomorrow(self, dry_run: bool = False) -> int:
-        """Sleep until 8:55 AM IST next day. Returns seconds to sleep."""
-        now = datetime.now(_IST)
-        tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
-        sleep_secs = int((tomorrow_morning - now).total_seconds())
-        if sleep_secs > 0 and not dry_run:
-            logger.info(f"Sleeping {sleep_secs / 3600:.1f} hours until next morning")
-            time.sleep(sleep_secs)
-        return max(sleep_secs, 1)
+    def _interruptible_sleep(self, seconds: int):
+        """Sleep in 60s chunks, waking early if the session is stopped/paused.
+
+        A dashboard 'stop' used to take until the next morning to be noticed
+        when the thread was in a multi-hour time.sleep().
+        """
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            chunk = min(60, max(1, int(deadline - time.monotonic())))
+            time.sleep(chunk)
+            session = db.query_one(
+                "SELECT status FROM sessions WHERE id = ?", (self.session_id,)
+            )
+            if not session or session["status"] not in ("active", "closing"):
+                return
+
+    def _pre_market_tasks(self, now: datetime):
+        """Once-per-day morning tasks: token health, macro news, FII/DII, portfolio sync."""
+        today_str = now.strftime("%Y-%m-%d")
+        if self._premarket_done_date == today_str:
+            return
+        self._premarket_done_date = today_str
+        logger.info("Running pre-market tasks...")
+        bot = get_bot()
+
+        # 1. Kite token health check — Kite tokens die every morning (~7:30 AM IST).
+        #    Catching this BEFORE market open beats discovering it mid-trade.
+        from aaitrade.kite_auth import check_token_health
+        from aaitrade.tools.market import _kite
+        is_live = self.config.execution_mode == ExecutionMode.LIVE
+        if is_live or _kite is not None:
+            ok, msg = check_token_health()
+            if not ok:
+                logger.warning(f"Pre-market token check FAILED: {msg}")
+                if bot:
+                    severity = "🚨 LIVE session" if is_live else "⚠️ Paper session (Kite data)"
+                    bot.send(
+                        f"{severity} {self.session_id}: Kite token is DEAD.\n"
+                        f"{msg}\n"
+                        f"Send /token <request_token> before 9:15 AM or "
+                        f"{'trading will fail' if is_live else 'data falls back to yfinance'}.",
+                        parse_mode=None,
+                    )
+            else:
+                logger.info(f"Pre-market token check OK: {msg}")
+
+        # 2. Macro news
+        try:
+            get_macro_news()
+        except Exception as e:
+            logger.error(f"Macro news fetch failed: {e}")
+
+        # 3. FII/DII flows prefetch (cached — briefing reads from cache)
+        try:
+            from aaitrade.tools.fiidii import get_fiidii_flows
+            get_fiidii_flows()
+        except Exception as e:
+            logger.warning(f"FII/DII prefetch failed: {e}")
+
+        # 4. Portfolio sync (live only)
+        if is_live:
+            try:
+                from aaitrade.portfolio_sync import sync_portfolio_with_kite
+                if _kite:
+                    sync_result = sync_portfolio_with_kite(self.session_id, _kite)
+                    if sync_result.get("discrepancies"):
+                        if bot:
+                            n = len(sync_result["discrepancies"])
+                            bot.send(f"📊 Portfolio sync: {n} discrepancy(ies) corrected")
+            except Exception as e:
+                logger.error(f"Portfolio sync failed: {e}")
+
+    def _maybe_run_offday_research(self, now: datetime):
+        """On weekends/holidays after 17:30 IST, run the research cycle once.
+
+        Produces a 'next-session outlook' (weekend news, geopolitics, policy
+        shifts, predicted Monday reactions) that gets injected into the next
+        trading day's briefings. Sunday's run supersedes Saturday's.
+        """
+        today_str = now.strftime("%Y-%m-%d")
+        if self._research_done_date == today_str:
+            return
+        if now.hour < 17 or (now.hour == 17 and now.minute < 30):
+            return
+        self._research_done_date = today_str
+
+        try:
+            from aaitrade.research import run_offday_research
+            outlook = run_offday_research(
+                self.claude, self.session_id,
+                model=getattr(self.config, "planning_model", None),
+            )
+            if outlook:
+                logger.info("Off-day research complete — outlook saved for next session")
+                bot = get_bot()
+                if bot:
+                    bot.send(f"🔭 *Next-Session Outlook Ready*\n{outlook[:800]}")
+        except Exception as e:
+            logger.error(f"Off-day research failed: {e}", exc_info=True)
+
+    def _set_tool_context(self):
+        """Point every tool module's globals at THIS session.
+
+        Must be called inside _CYCLE_LOCK at the start of every cycle — module
+        globals are shared across all sessions in the process.
+        """
+        from aaitrade.tools import (
+            portfolio_tools, memory, journal, watchlist_tools,
+            session_memory, session_analysis,
+        )
+        portfolio_tools.set_session_id(self.session_id)
+        memory.set_session_id(self.session_id)
+        journal.set_session_id(self.session_id)
+        watchlist_tools.set_session_id(self.session_id)
+        session_memory.set_session_id(self.session_id)
+        session_analysis.set_session_id(self.session_id)
 
     def _run_cycle(self, closing_mode: bool = False):
         """Run a single decision cycle."""
@@ -680,9 +812,17 @@ class SessionManager:
         if not session_check or session_check["status"] not in ("active", "closing"):
             return
 
+        with _CYCLE_LOCK:
+            self._run_cycle_locked(closing_mode)
+
+    def _run_cycle_locked(self, closing_mode: bool):
+        """Body of a decision cycle. Caller must hold _CYCLE_LOCK."""
         self.cycle_count += 1
         logger.info(f"{'─' * 40}")
         logger.info(f"Decision cycle {self.cycle_count}" + (" [CLOSING MODE]" if closing_mode else ""))
+
+        # Point all shared tool modules at this session before any tool runs
+        self._set_tool_context()
 
         # Check stop-loss conditions before running
         session = db.query_one(
@@ -718,12 +858,23 @@ class SessionManager:
         from aaitrade.tools.price_alerts import set_alert_context
         set_alert_context(self.session_id, self.cycle_count)
 
+        # Model tiering: the 9:30 planning cycle (pre-11:00, observe-only) runs
+        # on the stronger planning model — that's where deep reasoning pays.
+        # Execution cycles stay on the cheap model.
+        model_override = None
+        now_ist = datetime.now(_IST)
+        planning_model = getattr(self.config, "planning_model", None)
+        if planning_model and planning_model != self.config.model and now_ist.hour < 11:
+            model_override = planning_model
+            logger.info(f"Planning cycle — using {planning_model}")
+
         # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
         decisions = self.claude.make_decision(
             system_prompt=system_prompt,
             briefing=briefing,
             session_id=self.session_id,
             cycle_number=self.cycle_count,
+            model_override=model_override,
         )
 
         logger.info(f"Received {len(decisions)} decision(s) from Claude")
@@ -759,6 +910,26 @@ class SessionManager:
             return
         self._eod_done_date = today_str
         logger.info("End of day — generating summary...")
+
+        # Score the weekend/off-day outlook prediction against reality (once,
+        # then expire the bias row so it can't be double-scored)
+        try:
+            bias_row = db.query_one(
+                "SELECT id, summary FROM news_cache "
+                "WHERE category = 'outlook' AND key = 'bias' AND expires_at > ? "
+                "ORDER BY fetched_at DESC LIMIT 1",
+                (db.now_iso(),),
+            )
+            if bias_row:
+                from aaitrade.tools.market import get_market_snapshot
+                snap = get_market_snapshot()
+                nifty_chg = snap.get("nifty_50", {}).get("change_percent")
+                if nifty_chg is not None and "error" not in snap:
+                    from aaitrade.lessons import record_prediction_result
+                    record_prediction_result(self.session_id, bias_row["summary"], nifty_chg)
+                db.update("news_cache", bias_row["id"], {"expires_at": db.now_iso()})
+        except Exception as e:
+            logger.warning(f"Prediction scoring failed: {e}")
 
         # Check auto stop-loss on open positions (paper mode)
         self._check_stop_loss_triggers()

@@ -229,8 +229,16 @@ def get_macro_news() -> dict:
     if cached:
         return {"summary": cached, "source": "cache"}
 
+    # Tavily first: real-time and India-focused. NewsAPI's free tier delays
+    # articles ~24 hours and skews to US headlines — stale news was one reason
+    # the system 'missed' global market context.
+    tavily_summary = _macro_via_tavily()
+    if tavily_summary:
+        _write_cache("macro", "macro", tavily_summary, hours=3)
+        return {"summary": tavily_summary, "source": "tavily"}
+
     if not _newsapi:
-        return {"summary": "NewsAPI not configured.", "source": "error"}
+        return {"summary": "No news source configured (Tavily and NewsAPI both unavailable).", "source": "error"}
 
     if not _newsapi_check_and_count():
         return {
@@ -271,6 +279,35 @@ def get_macro_news() -> dict:
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _macro_via_tavily() -> str | None:
+    """Real-time macro digest via Tavily. Returns None if unavailable."""
+    try:
+        from aaitrade.tools import search as _search_mod
+        if _search_mod._tavily_client is None:
+            return None
+        today = datetime.now(_IST).strftime("%d %B %Y")
+        queries = [
+            f"global markets today {today} — US futures, Asian markets, oil, geopolitics affecting Indian stock market",
+            f"Indian stock market today {today} — Nifty outlook, FII flows, RBI, government policy news",
+        ]
+        parts = []
+        for q in queries:
+            resp = _search_mod._tavily_client.search(
+                query=q, search_depth="basic", max_results=3, include_answer=True,
+            )
+            answer = resp.get("answer", "")
+            if not answer:
+                results = resp.get("results", [])
+                answer = results[0].get("content", "")[:400] if results else ""
+            if answer:
+                parts.append(answer)
+        return "\n".join(parts) if parts else None
+    except Exception as e:
+        logger.warning(f"Tavily macro news failed: {e}")
+        return None
+
 
 # Simple symbol → company name mapping for better news search
 _COMPANY_MAP = {

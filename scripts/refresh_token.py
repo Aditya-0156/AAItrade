@@ -17,8 +17,18 @@ import sys
 from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────────
-API_KEY    = "9dz93b78apapfn1l"
-API_SECRET = "071tnt5srh72p63b96mh8s8btw9gogyk"  # regenerate on Zerodha dev console
+# Credentials come from .env — NEVER hardcode them here (this file is in git).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+
+API_KEY    = os.environ.get("KITE_API_KEY", "")
+API_SECRET = os.environ.get("KITE_API_SECRET", "")
+if not API_KEY or not API_SECRET:
+    print("ERROR: KITE_API_KEY / KITE_API_SECRET missing from .env")
+    sys.exit(1)
 
 SERVER_USER    = "ubuntu"
 SERVER_HOST    = "68.233.98.35"

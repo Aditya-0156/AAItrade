@@ -153,6 +153,8 @@ class TestBuyValidations:
             "stop_loss_price": 970, "take_profit_price": 1050,
             "opened_at": db.now_iso(),
         })
+        # current_capital is FREE CASH — ₹18,000 deployed leaves ₹2,000
+        db.update("sessions", session_with_watchlist, {"current_capital": 2000.0})
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 500)):
             result = ex.execute(buy("RELIANCE", 5))
         assert result["status"] == "rejected"

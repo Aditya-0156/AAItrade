@@ -53,16 +53,18 @@ class TestSessionMemory:
     def test_update_too_long_returns_error(self, in_memory_db, session_with_watchlist):
         from aaitrade.tools import session_memory
         session_memory.set_session_id(session_with_watchlist)
-        long_content = "x" * 2401
+        from aaitrade.tools.session_memory import MAX_MEMORY_CHARS
+        long_content = "x" * (MAX_MEMORY_CHARS + 500)
         result = session_memory.update_session_memory(long_content)
-        assert "error" in result
-        assert "chars_over_limit" in result
-        assert result["chars_over_limit"] == 1
+        # Overflow is auto-compressed/truncated to the limit and saved
+        assert result["status"] == "saved"
+        assert result["chars_used"] <= MAX_MEMORY_CHARS
 
     def test_update_exactly_at_limit_succeeds(self, in_memory_db, session_with_watchlist):
         from aaitrade.tools import session_memory
         session_memory.set_session_id(session_with_watchlist)
-        content = "x" * 2400
+        from aaitrade.tools.session_memory import MAX_MEMORY_CHARS
+        content = "x" * MAX_MEMORY_CHARS
         result = session_memory.update_session_memory(content)
         assert result["status"] == "saved"
         assert result["chars_remaining"] == 0
@@ -108,6 +110,8 @@ class TestPortfolioTools:
             "stop_loss_price": 3880, "take_profit_price": 4200,
             "opened_at": db.now_iso(),
         })
+        # current_capital in DB is FREE CASH — the BUY deducts it at trade time
+        db.update("sessions", session_with_watchlist, {"current_capital": 12000.0})
         result = portfolio_tools.get_cash()
         # Deployed = 2 × 4000 = ₹8,000; starting ₹20,000; available = ₹12,000
         assert result["deployed_capital"] == pytest.approx(8000.0)

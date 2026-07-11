@@ -201,12 +201,14 @@ class TestSessionMemoryAcrossCycles:
         from aaitrade.tools import session_memory
         session_memory.set_session_id(session_with_watchlist)
 
-        long_content = "WATCHING: " + "RELIANCE " * 300  # > 2400 chars
+        from aaitrade.tools.session_memory import MAX_MEMORY_CHARS
+        long_content = "WATCHING: " + "RELIANCE " * (MAX_MEMORY_CHARS // 9 + 20)  # > limit
         result = session_memory.update_session_memory(long_content)
-        assert "error" in result
-        assert result["chars_over_limit"] > 0
+        # Overflow is auto-compressed/truncated to the limit and saved
+        assert result["status"] == "saved"
+        assert result["chars_used"] <= MAX_MEMORY_CHARS
 
-        # Then Claude tries again with compressed content
+        # A subsequent normal-size update still works
         short_content = "WATCHING: RELIANCE — Oversold setup. RSI 33."
         result2 = session_memory.update_session_memory(short_content)
         assert result2["status"] == "saved"

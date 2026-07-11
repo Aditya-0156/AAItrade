@@ -131,7 +131,7 @@ class TestToolUseLoop:
             result = client.make_decision("sys", "briefing", session_with_watchlist, 1)
 
         assert result[0]["action"] == "HOLD"
-        assert "Exhausted" in result[0]["reason"]
+        assert "exhausted" in result[0]["reason"].lower()
 
     def test_decisions_logged_to_db(self, client, in_memory_db, session_with_watchlist):
         decision_json = '[{"action": "BUY", "symbol": "RELIANCE", "quantity": 2, "stop_loss_price": 2700.0, "take_profit_price": 2940.0, "reason": "good setup", "confidence": "high", "flags": []}]'

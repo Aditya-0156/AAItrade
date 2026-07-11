@@ -44,15 +44,21 @@ class ClaudeClient:
         briefing: str,
         session_id: int,
         cycle_number: int,
+        model_override: str | None = None,
     ) -> dict:
         """Run a full decision cycle with tool-use.
 
         Returns the parsed JSON decision from Claude.
         Uses prompt caching for system prompt to reduce costs ~65%.
+        model_override lets planning cycles run on a stronger model.
         """
+        model = model_override or self.model
         tools = get_tools_for_api()
 
         messages = [{"role": "user", "content": briefing}]
+
+        # Track token spend per cycle for observability
+        usage_totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
 
         # Tool-use loop: Claude may call tools multiple times before deciding
         for round_num in range(self.max_tool_rounds):
@@ -61,9 +67,9 @@ class ClaudeClient:
                 for attempt in range(4):
                     try:
                         response = self.client.messages.create(
-                            model=self.model,
+                            model=model,
                             max_tokens=8192,
-                            temperature=0.6,
+                            temperature=0.3,
                             system=[
                                 {
                                     "type": "text",
@@ -94,6 +100,16 @@ class ClaudeClient:
                              "stop_loss_price": None, "take_profit_price": None,
                              "reason": "Rate limit — too many concurrent sessions",
                              "confidence": "low", "flags": []}]
+
+            # Accumulate token usage
+            try:
+                u = response.usage
+                usage_totals["input"] += int(u.input_tokens or 0)
+                usage_totals["output"] += int(u.output_tokens or 0)
+                usage_totals["cache_read"] += int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                usage_totals["cache_write"] += int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+            except Exception:
+                pass
 
             # Check if Claude wants to use tools
             if response.stop_reason == "tool_use":
@@ -134,11 +150,28 @@ class ClaudeClient:
                             "content": result_json,
                         })
 
+                # Incremental conversation caching: move the cache breakpoint to
+                # the newest tool_result each round. Without this every round
+                # re-processes the WHOLE conversation (all prior tool outputs)
+                # at full input price — the #1 token cost in a 10-30 round cycle.
+                for msg in messages:
+                    if msg["role"] == "user" and isinstance(msg["content"], list):
+                        for block in msg["content"]:
+                            if isinstance(block, dict):
+                                block.pop("cache_control", None)
+                if tool_results:
+                    tool_results[-1]["cache_control"] = {"type": "ephemeral"}
+
                 # Add assistant response and tool results to conversation
                 messages.append({"role": "assistant", "content": assistant_content})
                 messages.append({"role": "user", "content": tool_results})
 
             elif response.stop_reason == "end_turn":
+                logger.info(
+                    f"Cycle {cycle_number} token usage: "
+                    f"in={usage_totals['input']:,} out={usage_totals['output']:,} "
+                    f"cache_read={usage_totals['cache_read']:,} cache_write={usage_totals['cache_write']:,}"
+                )
                 # Claude is done — extract the final text
                 decision_text = ""
                 for block in response.content:

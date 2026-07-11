@@ -385,81 +385,27 @@ class TradingServer:
     def update_kite_token(self, token: str) -> dict:
         """Update Kite access token for all active sessions and persist to .env.
 
-        If token is a request_token (from login URL), automatically exchange it for access_token.
+        If token is a request_token (from login URL), automatically exchange it
+        for an access_token. All credential handling lives in kite_auth.
         """
         self._ensure_initialized()
 
-        # Determine if this is a request_token (needs exchange) or access_token (use directly).
-        # Both are ~32 chars so we can't use length. Instead: try it as access_token first;
-        # if Kite rejects it, try exchanging it as a request_token.
-        from kiteconnect import KiteConnect
-        _probe = KiteConnect(api_key="9dz93b78apapfn1l")
-        _probe.set_access_token(token)
-        try:
-            _probe.profile()
-            logger.info("Token validated as access_token directly")
-        except Exception:
-            # Not a valid access_token — try treating it as a request_token to exchange
-            try:
-                data = _probe.generate_session(token, api_secret="071tnt5srh72p63b96mh8s8btw9gogyk")
-                token = data['access_token']
-                logger.info("Converted request_token to access_token")
-            except Exception as e:
-                return {"status": "error", "message": f"Failed to exchange request_token: {e}. Token may have expired (valid for 2 minutes after login)."}
+        from aaitrade.kite_auth import apply_kite_token
+        result = apply_kite_token(token)
+        if result["status"] != "ok":
+            return result
 
-        os.environ["KITE_ACCESS_TOKEN"] = token
+        # Refresh stored keys so future session recoveries use the NEW token
+        # (self._keys is frozen — rebuild it from the updated environment).
+        self._keys = APIKeys.from_env()
 
-        # Persist to .env file
-        env_path = Path(__file__).parent.parent / ".env"
-        try:
-            # Read current .env
-            env_content = ""
-            if env_path.exists():
-                with open(env_path, "r") as f:
-                    env_content = f.read()
-
-            # Replace or add KITE_ACCESS_TOKEN line
-            lines = env_content.split("\n")
-            found = False
-            for i, line in enumerate(lines):
-                if line.startswith("KITE_ACCESS_TOKEN="):
-                    lines[i] = f"KITE_ACCESS_TOKEN={token}"
-                    found = True
-                    break
-            if not found:
-                lines.append(f"KITE_ACCESS_TOKEN={token}")
-
-            # Write back
-            with open(env_path, "w") as f:
-                f.write("\n".join(lines))
-
-            logger.info(f"Token persisted to .env file")
-        except Exception as e:
-            logger.error(f"Failed to persist token to .env: {e}")
-
-        # Update live Kite client and validate token via profile call
-        try:
-            from kiteconnect import KiteConnect
-            from aaitrade.tools.market import set_kite_client
-            kite = KiteConnect(api_key="9dz93b78apapfn1l")
-            kite.set_access_token(token)
-            profile = kite.profile()
-            logger.info(f"Kite token validated — logged in as {profile['user_name']} ({profile['email']})")
-            set_kite_client(kite)
-        except Exception as e:
-            return {"status": "error", "message": f"Token invalid or Kite API error: {e}"}
-
-        # Push token into all running session managers so they can trade immediately
-        injected = []
+        # Push the fresh client into every running session's price monitor
+        from aaitrade.tools.market import _kite
         with self._lock:
             for sid, st in self._sessions.items():
                 try:
-                    from aaitrade.tools.market import _kite
-                    st.manager.kite = _kite
-                    if hasattr(st.manager, 'executor') and st.manager.executor:
-                        from aaitrade.executor import set_kite_client as exec_set
-                        exec_set(_kite)
-                    injected.append(sid)
+                    if hasattr(st.manager, "_price_monitor"):
+                        st.manager._price_monitor.set_kite_client(_kite)
                 except Exception:
                     pass
 
@@ -474,7 +420,7 @@ class TradingServer:
                     self._recover_session(row["id"])
                     recovered.append(row["id"])
 
-        msg = "Token updated, applied live, and persisted to .env"
+        msg = result["message"]
         if recovered:
             msg += f". Recovered sessions: {recovered}"
         return {"status": "ok", "message": msg}

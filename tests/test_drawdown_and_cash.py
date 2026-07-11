@@ -79,7 +79,7 @@ class TestGetCash:
         result = portfolio_tools.get_cash()
 
         assert result["starting_capital"] == 20000.0
-        assert result["current_capital"] == 20000.0
+        assert result["available_cash"] == 20000.0
         assert result["deployed_capital"] == 0.0
         assert result["secured_profit"] == 0.0
         assert result["total_portfolio_value"] == 20000.0
@@ -97,9 +97,8 @@ class TestGetCash:
 
         result = portfolio_tools.get_cash()
 
-        assert result["current_capital"] == 15000.0
+        assert result["available_cash"] == 15000.0
         assert result["deployed_capital"] == 5000.0
-        assert result["available_cash"] == 10000.0
         assert result["total_portfolio_value"] == 20000.0   # 15000 + 5000 + 0
         assert result["total_pnl"] == 0.0                  # NOT -5000 (the old bug)
 

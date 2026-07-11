@@ -63,6 +63,7 @@ def safe_config():
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
         profit_reinvest_ratio=0.0,  # safe: secure all profit
+        charges_enabled=False,  # exact-value assertions assume zero charges
     )
 
 
@@ -76,6 +77,7 @@ def balanced_config():
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
         profit_reinvest_ratio=0.5,  # balanced: 50/50
+        charges_enabled=False,  # exact-value assertions assume zero charges
     )
 
 
@@ -89,6 +91,7 @@ def aggressive_config():
         watchlist_path="config/watchlist_seed.yaml",
         decision_interval_minutes=240,
         profit_reinvest_ratio=1.0,  # aggressive: reinvest all
+        charges_enabled=False,  # exact-value assertions assume zero charges
     )
 
 

@@ -30,14 +30,14 @@ class TestSystemPrompt:
     def test_system_prompt_contains_trading_mindset(self, in_memory_db, balanced_config, session_with_watchlist):
         ctx = ContextBuilder(balanced_config, session_with_watchlist)
         prompt = ctx.build_system_prompt()
-        assert "TRADING MINDSET" in prompt
-        assert "news reactor" in prompt.lower() or "sophisticated" in prompt.lower()
+        assert "THE CORE PHILOSOPHY" in prompt
+        assert "visit" in prompt.lower()  # visit-frequency test is the core method
 
     def test_system_prompt_contains_strategies(self, in_memory_db, balanced_config, session_with_watchlist):
         ctx = ContextBuilder(balanced_config, session_with_watchlist)
         prompt = ctx.build_system_prompt()
         assert "Oversold Bounce" in prompt
-        assert "Breakout" in prompt
+        assert "Range Oscillation" in prompt
         assert "Sector Rotation" in prompt
 
     def test_system_prompt_watchlist_adjust_block_enabled(self, in_memory_db, balanced_config, session_with_watchlist):

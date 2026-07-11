@@ -341,13 +341,17 @@ class MultiSessionRunner:
             name = row["name"] or f"session-{row['id']}"
             session_id = row["id"]
 
-            # Build a default config for recovery — use balanced defaults
+            # Restore the REAL config from the DB. Hardcoded paper/balanced
+            # defaults here silently recovered LIVE sessions as paper —
+            # the executor would then only simulate trades.
+            full = db.query_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            db_mode = full["trading_mode"]
             config = SessionConfig(
-                execution_mode=ExecutionMode.PAPER,
-                trading_mode=TradingMode.BALANCED,
-                starting_capital=20000,
-                total_days=14,
-                watchlist_path=Path("config/watchlist_seed.yaml"),
+                execution_mode=ExecutionMode(full["execution_mode"]),
+                trading_mode=TradingMode(db_mode if db_mode != "custom" else "balanced"),
+                starting_capital=full["starting_capital"],
+                total_days=full["total_days"],
+                watchlist_path=Path(full["watchlist_path"]),
             )
 
             manager = self._init_recovered(name, config, session_id)
