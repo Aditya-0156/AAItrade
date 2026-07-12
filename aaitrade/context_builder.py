@@ -102,6 +102,11 @@ Thesis & Memory:
 - save_insight(insight, symbol?) — save a REPEATABLE pattern you noticed (works across sessions, forever). Only generalizable lessons: "X fails when Y". Not routine notes.
 - get_lessons(symbol?, limit?) — recall your track record: automatic win/loss records with theses, your saved insights, prediction scores. Call with a symbol before re-trading a stock you've traded before. The 5 most recent already appear in your briefing.
 
+Policy Intelligence (public-information edge):
+- find_policy_beneficiaries(text) — pass any policy headline/theme; returns NSE-500 companies that benefit, with reasons (sector, name, or researched connection). Call this THE MOMENT policy news breaks — beneficiaries a human takes hours to list, you get instantly.
+- save_connection(subject, subject_type, relation, object, object_type, confidence, source) — record a factual, sourced connection: who promotes which company, which ministry pushes which policy, which company benefits from which theme. Public info only; always cite the source and be honest about confidence.
+- find_connections(name) — recall everything the graph knows about a company/person/ministry/theme, with sources.
+
 You may buy additional shares of a stock you already hold — the portfolio automatically recalculates the weighted average price.
 
 Price Alerts (between-cycle monitoring):
@@ -136,6 +141,14 @@ The regime is derived from VIX level/slope, Nifty vs MA20/50, and overnight US m
 
 LEARN FROM YOUR TRACK RECORD:
 Your briefing includes your win rate, average win/loss, charges paid, and recent lessons. If your recent losses share a pattern (same setup type, same regime, same sector), STOP repeating it and save_insight the pattern. Before re-trading a symbol, get_lessons(symbol) — you may have already learned something expensive about it.
+
+POLICY → BENEFICIARY THINKING (the overlooked-in-plain-sight edge):
+Indian policy moves stocks through ownership and alignment, not just sectors. When a ministry pushes a theme repeatedly (ethanol, defence exports, railway capex), the companies aligned with that push — sometimes promoter-linked to the people pushing it — outperform for months, not hours. Your workflow when policy news appears (briefing POLICY SIGNALS section, macro news, or search results):
+1. find_policy_beneficiaries(headline) → instant beneficiary list across the NSE 500.
+2. find_connections on the interesting names — the graph may know promoter/political links with sources.
+3. analyze_levels on the best candidates — policy tailwind + demonstrated floor = your highest-conviction setup type. A policy beneficiary at a floor beats a random stock at a floor.
+4. When research reveals a NEW connection (promoter families, ministry alignments, supply relationships), save_connection with the source — the graph compounds and future you profits from it.
+Repeated policy pushes matter more than one-off announcements — a theme mentioned 3 weeks running is an accumulation signal, not noise.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THE CORE PHILOSOPHY — READ THIS TWICE
@@ -393,7 +406,7 @@ Global Markets: {global_context}
 
 Macro/World News: {macro_news}
 
-FII/DII Flows: {fii_dii}{outlook_section}
+FII/DII Flows: {fii_dii}{outlook_section}{policy_signals}
 
 🔎 SCANNER — top setups from full NSE-500 scan:
 {scanner_block}
@@ -691,6 +704,13 @@ class ContextBuilder:
         except Exception:
             scanner_block = "No scan available yet."
 
+        # Policy signals: themes detected in today's news → beneficiaries
+        try:
+            from aaitrade.knowledge import policy_signals_block
+            policy_signals = policy_signals_block()
+        except Exception:
+            policy_signals = ""
+
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
             regime_line=regime_line,
@@ -699,6 +719,7 @@ class ContextBuilder:
             macro_news=macro_news,
             fii_dii=fii_dii,
             outlook_section=outlook_section,
+            policy_signals=policy_signals,
             scanner_block=scanner_block,
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,

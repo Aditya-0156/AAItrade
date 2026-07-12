@@ -59,8 +59,17 @@ def get_universe() -> list[str]:
         logger.warning(f"Universe download failed (will use cache): {e}")
 
     if _UNIVERSE_CACHE.exists():
+        csv_text = _UNIVERSE_CACHE.read_text()
+
+        # Feed the knowledge layer: full-market company/sector structure
+        try:
+            from aaitrade.knowledge import refresh_stock_universe
+            refresh_stock_universe(csv_text)
+        except Exception as e:
+            logger.warning(f"stock_universe refresh failed: {e}")
+
         symbols = []
-        for line in _UNIVERSE_CACHE.read_text().splitlines()[1:]:
+        for line in csv_text.splitlines()[1:]:
             parts = line.split(",")
             if len(parts) >= 3:
                 sym = parts[2].strip().strip('"')

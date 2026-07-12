@@ -79,6 +79,35 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Ensure knowledge-layer tables exist (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stock_universe ("
+                "symbol TEXT PRIMARY KEY, company_name TEXT NOT NULL, "
+                "industry TEXT, updated_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS entities ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+                "etype TEXT NOT NULL, notes TEXT, created_at TEXT NOT NULL, "
+                "UNIQUE(name, etype))"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS edges ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "src_id INTEGER NOT NULL REFERENCES entities(id), "
+                "relation TEXT NOT NULL, "
+                "dst_id INTEGER NOT NULL REFERENCES entities(id), "
+                "confidence REAL NOT NULL DEFAULT 0.5, source TEXT, "
+                "observed_at TEXT, created_at TEXT NOT NULL, "
+                "UNIQUE(src_id, relation, dst_id))"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id)")
+    except Exception:
+        pass
+
     # Ensure scan_results table exists (for existing DBs)
     try:
         with get_connection() as conn:
@@ -291,6 +320,43 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+-- Full-market structure: every NSE-500 company with its sector.
+-- Lets the system map "policy theme" -> industry/company-name -> symbols
+-- across the WHOLE market, not just the watchlist.
+CREATE TABLE IF NOT EXISTS stock_universe (
+    symbol          TEXT PRIMARY KEY,
+    company_name    TEXT NOT NULL,
+    industry        TEXT,
+    updated_at      TEXT NOT NULL
+);
+
+-- Knowledge graph: entities and relations accumulated from research.
+-- Every edge carries provenance (source) and confidence — the LLM treats
+-- low-confidence edges skeptically and can cite sources when acting.
+CREATE TABLE IF NOT EXISTS entities (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    etype           TEXT NOT NULL,          -- person / company / ministry / policy_theme / sector
+    notes           TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE(name, etype)
+);
+
+CREATE TABLE IF NOT EXISTS edges (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_id          INTEGER NOT NULL REFERENCES entities(id),
+    relation        TEXT NOT NULL,          -- family_of / promoter_of / director_of / pushes_policy / benefits_from / operates_in / linked_to
+    dst_id          INTEGER NOT NULL REFERENCES entities(id),
+    confidence      REAL NOT NULL DEFAULT 0.5,   -- 0..1
+    source          TEXT,                    -- URL or citation text
+    observed_at     TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE(src_id, relation, dst_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id);
 
 CREATE TABLE IF NOT EXISTS scan_results (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

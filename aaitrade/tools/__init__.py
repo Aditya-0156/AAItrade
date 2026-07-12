@@ -138,6 +138,7 @@ _TOOL_MODULES = [
     "aaitrade.tools.price_alerts",
     "aaitrade.tools.levels",
     "aaitrade.tools.insights",
+    "aaitrade.tools.knowledge_tools",
 ]
 
 

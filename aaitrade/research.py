@@ -180,4 +180,107 @@ def run_offday_research(claude_client, session_id: int, model: str | None = None
     })
 
     logger.info(f"Off-day research saved: outlook for {next_day} (bias {bias}, {len(outlook)} chars)")
+
+    # Phase B/C: expand the connection graph from this week's research material
+    try:
+        _expand_connection_graph(claude_client, intel, model=model)
+    except Exception as e:
+        logger.warning(f"Connection-graph expansion failed: {e}")
+
     return outlook
+
+
+# ── Connection-graph expansion (Phase B + C-lite) ─────────────────────────
+
+_EXTRACTION_SYSTEM = (
+    "You extract factual, sourced connections from research material for a "
+    "public-information knowledge graph about Indian markets and policy. "
+    "PUBLIC information only. Only extract what the material actually states — "
+    "no speculation. Be honest with confidence: 0.9 = stated in a filing or "
+    "major outlet, 0.5 = single news mention, 0.3 = weak inference."
+)
+
+_EXTRACTION_PROMPT = """From the research material below, extract connections worth remembering for trading Indian equities.
+
+Valid relations: family_of, promoter_of, director_of, owns_stake, ministry_of, pushes_policy, benefits_from, operates_in, supplies_to, linked_to
+Valid entity types: person, company, ministry, policy_theme, sector
+Known policy themes (use these names when they fit): {themes}
+
+── MATERIAL ──
+{material}
+
+Output ONLY a JSON array (may be empty) of objects:
+[{{"subject": "...", "subject_type": "...", "relation": "...", "object": "...", "object_type": "...", "confidence": 0.6, "source": "short citation"}}]
+
+Extract at most 12 high-value connections. Skip anything already obvious from a company's name or sector."""
+
+
+def _expand_connection_graph(claude_client, intel: dict, model: str | None = None):
+    """One weekly Claude call: turn research material into graph edges.
+
+    Also runs Phase C-lite: promoter/ownership mini-research on two rotating
+    top-scanner names, so the ownership map deepens a little every week.
+    """
+    material_parts = [intel.get("macro_news", ""), intel.get("search_results", "")]
+
+    # Phase C-lite: promoter research for 2 rotating top scanner picks
+    try:
+        from aaitrade.tools.search import search_web, _tavily_client
+        if _tavily_client:
+            top = db.query(
+                "SELECT symbol FROM scan_results WHERE scan_date = "
+                "(SELECT MAX(scan_date) FROM scan_results) ORDER BY rank LIMIT 10",
+            )
+            if top:
+                week = datetime.now(_IST).isocalendar()[1]
+                picks = [top[week % len(top)]["symbol"],
+                         top[(week + 5) % len(top)]["symbol"]]
+                for sym in dict.fromkeys(picks):
+                    r = search_web(f"{sym} NSE company promoter family owners political connections")
+                    ans = r.get("answer") or ""
+                    if ans:
+                        material_parts.append(f"[promoter research: {sym}]\n{ans}")
+    except Exception as e:
+        logger.warning(f"Promoter mini-research failed: {e}")
+
+    material = "\n\n".join(p for p in material_parts if p)[:12000]
+    if len(material) < 200:
+        return
+
+    from aaitrade.knowledge import POLICY_THEMES, add_edge
+    prompt = _EXTRACTION_PROMPT.format(
+        themes=", ".join(POLICY_THEMES.keys()), material=material,
+    )
+
+    response = claude_client.client.messages.create(
+        model=model or claude_client.model,
+        max_tokens=1500,
+        temperature=0.1,
+        system=_EXTRACTION_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+
+    import json as _json
+    start, end = text.find("["), text.rfind("]") + 1
+    if start < 0 or end <= start:
+        return
+    try:
+        triples = _json.loads(text[start:end])
+    except Exception:
+        logger.warning("Graph extraction: could not parse JSON output")
+        return
+
+    saved = 0
+    for t in triples[:12]:
+        try:
+            result = add_edge(
+                t["subject"], t["subject_type"], t["relation"],
+                t["object"], t["object_type"],
+                float(t.get("confidence", 0.4)), t.get("source", ""),
+            )
+            if result.get("status") == "saved":
+                saved += 1
+        except Exception:
+            continue
+    logger.info(f"Connection graph: +{saved} edges from weekly research")
