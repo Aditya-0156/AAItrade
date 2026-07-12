@@ -1014,75 +1014,65 @@ class SessionManager:
             })
 
     def _check_stop_loss_triggers(self):
-        """Check if any open positions hit their stop-loss or take-profit."""
+        """EOD risk review — FLAG positions that closed beyond stop/target.
+
+        This used to FORCE-SELL at the stop price, which was wrong twice over:
+        (1) the market is closed at EOD, so live orders would just be rejected;
+        (2) auto-selling a routine -3% dip is the whipsaw that the hold-through-
+        noise strategy exists to avoid — the user confirmed tight auto-stops
+        lost money until positions got breathing room.
+
+        Real protection comes from the price monitor: intraday stop breaches
+        wake Claude for a judged decision (panic vs catastrophe), and the hard
+        loss cap (≈-7.5% on a standard position) force-exits true disasters.
+        This EOD pass only makes sure tomorrow's first cycle starts with eyes
+        on every breach — the monitor re-wakes Claude at 9:15 if it persists.
+        """
         positions = db.query(
             "SELECT id, symbol, quantity, avg_price, stop_loss_price, take_profit_price "
             "FROM portfolio WHERE session_id = ?",
             (self.session_id,),
         )
+        bot = get_bot()
 
         for pos in positions:
             from aaitrade.tools.market import get_current_price
             price_data = get_current_price(pos["symbol"])
             if "error" in price_data:
                 logger.warning(
-                    f"EOD stop-loss check: could not fetch price for {pos['symbol']} "
-                    f"(held: {pos['quantity']} shares @ avg ₹{pos['avg_price']}). "
-                    f"Stop-loss/take-profit NOT evaluated — position stays open. "
+                    f"EOD review: could not fetch price for {pos['symbol']} — skipped. "
                     f"Error: {price_data.get('error')}"
                 )
-                bot = get_bot()
-                if bot:
-                    bot.send(
-                        f"⚠️ EOD: Could not fetch price for *{pos['symbol']}*. "
-                        f"Stop-loss not evaluated — position remains open."
-                    )
                 continue
 
             current_price = price_data["last_price"]
 
-            # Stop-loss hit
             if pos["stop_loss_price"] and current_price <= pos["stop_loss_price"]:
-                logger.warning(f"STOP-LOSS triggered for {pos['symbol']} at ₹{current_price}")
-                decision = {
-                    "action": "SELL",
-                    "symbol": pos["symbol"],
-                    "quantity": pos["quantity"],
-                    "reason": f"Stop-loss triggered at ₹{current_price} (stop was ₹{pos['stop_loss_price']})",
-                    "confidence": "high",
-                    "flags": [],
-                }
-                result = self.executor.execute(decision)
-
-                bot = get_bot()
-                if bot and result.get("status") == "executed":
-                    bot.send_trade_alert(
-                        action="SELL", symbol=pos["symbol"],
-                        quantity=pos["quantity"], price=current_price,
-                        reason="Stop-loss triggered", pnl=result.get("pnl"),
-                        mode=result.get("mode", "paper"),
+                pct = (current_price - pos["avg_price"]) / pos["avg_price"] * 100
+                logger.warning(
+                    f"EOD review: {pos['symbol']} closed at ₹{current_price} — below stop "
+                    f"₹{pos['stop_loss_price']} ({pct:+.1f}% vs entry). Decision at open."
+                )
+                if bot:
+                    bot.send(
+                        f"⚠️ EOD: {pos['symbol']} closed below its stop level "
+                        f"(₹{current_price} vs stop ₹{pos['stop_loss_price']}, {pct:+.1f}%). "
+                        f"The system will decide at tomorrow's open — panic dips get held, "
+                        f"broken companies get exited.",
+                        parse_mode=None,
                     )
 
-            # Take-profit hit
             elif pos["take_profit_price"] and current_price >= pos["take_profit_price"]:
-                logger.info(f"TAKE-PROFIT triggered for {pos['symbol']} at ₹{current_price}")
-                decision = {
-                    "action": "SELL",
-                    "symbol": pos["symbol"],
-                    "quantity": pos["quantity"],
-                    "reason": f"Take-profit triggered at ₹{current_price} (target was ₹{pos['take_profit_price']})",
-                    "confidence": "high",
-                    "flags": [],
-                }
-                result = self.executor.execute(decision)
-
-                bot = get_bot()
-                if bot and result.get("status") == "executed":
-                    bot.send_trade_alert(
-                        action="SELL", symbol=pos["symbol"],
-                        quantity=pos["quantity"], price=current_price,
-                        reason="Take-profit triggered", pnl=result.get("pnl"),
-                        mode=result.get("mode", "paper"),
+                logger.info(
+                    f"EOD review: {pos['symbol']} closed at ₹{current_price} — above target "
+                    f"₹{pos['take_profit_price']}. Profit-take decision at open."
+                )
+                if bot:
+                    bot.send(
+                        f"💰 EOD: {pos['symbol']} closed above its target "
+                        f"(₹{current_price} vs ₹{pos['take_profit_price']}). "
+                        f"Profit-take will be decided at tomorrow's open.",
+                        parse_mode=None,
                     )
 
     def _close_all_positions(self):
