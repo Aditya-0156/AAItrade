@@ -35,16 +35,19 @@ CYCLE_SLOTS = [(9, 30), (11, 0), (12, 30), (14, 0)]
 class PriceMonitor:
     """Background thread that monitors price alerts and triggers ad-hoc cycles."""
 
-    def __init__(self, session_id: int, trigger_callback):
+    def __init__(self, session_id: int, trigger_callback, max_position_loss_pct: float = 1.5):
         """
         Args:
             session_id: The session to monitor alerts for.
             trigger_callback: Function to call when an alert fires.
                               Signature: callback(triggered_alerts: list[dict]) -> None
                               Each dict has: id, symbol, target_price, direction, reason, current_price
+            max_position_loss_pct: hard cap — a position losing more than this %
+                              of effective capital triggers a FORCED exit.
         """
         self.session_id = session_id
         self._trigger_callback = trigger_callback
+        self._max_position_loss_pct = max_position_loss_pct
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._cycle_running = threading.Event()  # Set when a scheduled cycle is in progress
@@ -190,6 +193,22 @@ class PriceMonitor:
                     "margin_pct": alert["margin_pct"],
                 })
 
+        # Effective capital for the hard loss cap (free cash + deployed at cost)
+        cap_value = None
+        try:
+            sess = db.query_one(
+                "SELECT current_capital FROM sessions WHERE id = ?", (self.session_id,)
+            )
+            deployed = db.query_one(
+                "SELECT SUM(quantity * avg_price) as t FROM portfolio WHERE session_id = ?",
+                (self.session_id,),
+            )
+            if sess:
+                effective = sess["current_capital"] + ((deployed["t"] or 0) if deployed else 0)
+                cap_value = effective * self._max_position_loss_pct / 100
+        except Exception:
+            pass
+
         # Check position stop-loss / take-profit breaches (auto-watched)
         today = now.strftime("%Y-%m-%d")
         for pos in positions:
@@ -197,6 +216,32 @@ class PriceMonitor:
             if symbol not in prices:
                 continue
             current_price = prices[symbol]
+
+            # HARD LOSS CAP — highest priority, forces an exit (not a debate)
+            unrealized_loss = (pos["avg_price"] - current_price) * pos["quantity"]
+            if cap_value and unrealized_loss >= cap_value:
+                if self._position_trigger_dates.get((symbol, "loss_cap")) != today:
+                    self._position_trigger_dates[(symbol, "loss_cap")] = today
+                    logger.critical(
+                        f"LOSS CAP BREACHED: {symbol} down ₹{unrealized_loss:.0f} "
+                        f"(cap ₹{cap_value:.0f}) — forcing exit"
+                    )
+                    triggered.append({
+                        "id": None,
+                        "symbol": symbol,
+                        "target_price": current_price,
+                        "direction": "below",
+                        "kind": "loss_cap",
+                        "quantity": pos["quantity"],
+                        "reason": (
+                            f"HARD LOSS CAP: position lost ₹{unrealized_loss:.0f}, over the "
+                            f"{self._max_position_loss_pct}% capital cap (₹{cap_value:.0f}). "
+                            f"The system force-sold it — review and re-plan."
+                        ),
+                        "current_price": current_price,
+                        "margin_pct": 0,
+                    })
+                continue  # loss-cap supersedes the ordinary stop check
 
             breach = None
             if pos["stop_loss_price"] and current_price <= pos["stop_loss_price"]:

@@ -147,6 +147,7 @@ class SessionManager:
         self._price_monitor = PriceMonitor(
             session_id=self.session_id,
             trigger_callback=self._on_alert_triggered,
+            max_position_loss_pct=getattr(self.config.risk_rules, "max_position_loss_pct", 1.5),
         )
 
         # Notify via Telegram
@@ -376,6 +377,16 @@ class SessionManager:
         if eod_time > now and self._eod_done_date != today_str:
             candidates.append((eod_time, "end-of-day processing"))
 
+        # Post-close market scan slot
+        scan_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
+        if scan_time > now:
+            try:
+                from aaitrade.scanner import already_scanned_today
+                if not already_scanned_today():
+                    candidates.append((scan_time, "post-close market scan"))
+            except Exception:
+                pass
+
         tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=55, second=0, microsecond=0)
         candidates.append((tomorrow_morning, "tomorrow pre-market"))
 
@@ -417,6 +428,7 @@ class SessionManager:
             self._price_monitor = PriceMonitor(
                 session_id=self.session_id,
                 trigger_callback=self._on_alert_triggered,
+                max_position_loss_pct=getattr(self.config.risk_rules, "max_position_loss_pct", 1.5),
             )
             # Wire up the Kite client if it's already initialised
             from aaitrade.tools import market as _market
@@ -481,6 +493,16 @@ class SessionManager:
                     except Exception as e:
                         logger.error(f"EOD processing failed: {e}", exc_info=True)
 
+                    # Post-close full-market scan (~15:50+; internally guarded
+                    # so multiple sessions / reruns don't repeat it)
+                    scan_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
+                    if now >= scan_time:
+                        try:
+                            from aaitrade.scanner import run_daily_scan
+                            run_daily_scan()
+                        except Exception as e:
+                            logger.error(f"Daily scan failed: {e}", exc_info=True)
+
                     if is_closing:
                         positions = db.query(
                             "SELECT COUNT(*) as cnt FROM portfolio WHERE session_id = ? AND quantity > 0",
@@ -532,6 +554,29 @@ class SessionManager:
         """Called by PriceMonitor when price alerts fire. Runs an ad-hoc cycle."""
         symbols = [a["symbol"] for a in triggered_alerts]
         logger.info(f"Price alert triggered for: {', '.join(symbols)} — running ad-hoc cycle")
+
+        # HARD LOSS CAP breaches are executed by Python FIRST — this rule is
+        # not up for debate. Claude is then woken to see the result and re-plan.
+        for alert in triggered_alerts:
+            if alert.get("kind") != "loss_cap":
+                continue
+            try:
+                result = self.executor.execute({
+                    "action": "SELL",
+                    "symbol": alert["symbol"],
+                    "quantity": alert.get("quantity"),
+                    "reason": alert["reason"],
+                    "confidence": "high",
+                    "flags": [],
+                })
+                logger.critical(
+                    f"Loss-cap forced SELL {alert['symbol']}: {result.get('status')} "
+                    f"(P&L ₹{result.get('pnl', 'n/a')})"
+                )
+                alert["reason"] += f" [Forced sell status: {result.get('status')}]"
+            except Exception as e:
+                logger.error(f"Loss-cap forced sell failed for {alert['symbol']}: {e}")
+                alert["reason"] += f" [FORCED SELL FAILED: {e} — exit manually via execute_trade]"
 
         # Send Telegram notification
         bot = get_bot()
@@ -736,6 +781,22 @@ class SessionManager:
             get_macro_news()
         except Exception as e:
             logger.error(f"Macro news fetch failed: {e}")
+
+        # 2b. Scan catch-up: if the post-close scan never ran (server was down,
+        # fresh deploy, holiday restart), run it now — yesterday's closes are
+        # exactly what the morning briefing needs anyway.
+        try:
+            from aaitrade.scanner import run_daily_scan
+            latest = db.query_one("SELECT MAX(scan_date) as d FROM scan_results")
+            stale = True
+            if latest and latest["d"]:
+                age_days = (now.date() - datetime.fromisoformat(latest["d"]).date()).days
+                stale = age_days > 3  # Friday's scan is still fine on Monday
+            if stale:
+                logger.info("Scan missing/stale — running catch-up scan now")
+                run_daily_scan()
+        except Exception as e:
+            logger.warning(f"Scan catch-up failed: {e}")
 
         # 3. FII/DII flows prefetch (cached — briefing reads from cache)
         try:

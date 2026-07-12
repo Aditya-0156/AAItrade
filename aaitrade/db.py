@@ -79,6 +79,23 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Ensure scan_results table exists (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS scan_results ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, scan_date TEXT NOT NULL, "
+                "symbol TEXT NOT NULL, rank INTEGER, score REAL, close REAL, "
+                "entry_level REAL, entry_touches INTEGER, target_level REAL, "
+                "target_touches INTEGER, gap_pct REAL, band_pos REAL, shape TEXT, "
+                "turnover_cr REAL, created_at TEXT NOT NULL, UNIQUE(scan_date, symbol))"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scan_results_date ON scan_results(scan_date, rank)"
+            )
+    except Exception:
+        pass
+
     # Ensure lessons table exists (for existing DBs)
     try:
         with get_connection() as conn:
@@ -274,6 +291,27 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+CREATE TABLE IF NOT EXISTS scan_results (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_date       TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    rank            INTEGER,
+    score           REAL,
+    close           REAL,
+    entry_level     REAL,
+    entry_touches   INTEGER,
+    target_level    REAL,
+    target_touches  INTEGER,
+    gap_pct         REAL,
+    band_pos        REAL,
+    shape           TEXT,
+    turnover_cr     REAL,
+    created_at      TEXT NOT NULL,
+    UNIQUE(scan_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_results_date ON scan_results(scan_date, rank);
 
 CREATE TABLE IF NOT EXISTS lessons (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

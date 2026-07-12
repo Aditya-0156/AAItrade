@@ -47,6 +47,11 @@ class RiskRules:
     # Session-level (universal — same for all modes)
     session_stop_loss: float = 40.0       # halt session at 40% drawdown
 
+    # Hard cap: one position may never lose more than this % of effective
+    # capital. Enforced by the price monitor with a FORCED exit — this is the
+    # rule that stops one runaway loser from eating a month of 1% wins.
+    max_position_loss_pct: float = 1.5
+
 
 RISK_PROFILES: dict[TradingMode, RiskRules] = {
     TradingMode.SAFE: RiskRules(

@@ -48,7 +48,8 @@ HARD RISK RULES (enforce always)
 6. Total drawdown hits {session_stop_loss}% → halt session (flag: HALT_SESSION)
 7. Only trade symbols on your watchlist
 8. Never trade first 15min (before 9:30 AM) or last 15min (after 3:15 PM) of market
-9. No trades in Cycle 1 (the 9:30 AM scheduled slot). Market open is volatile and misleading — observe, research, plan. Trade from Cycle 2 onwards. EXCEPTION: this rule does NOT apply to ad-hoc cycles triggered by a price alert (the briefing will say "⚡ PRICE ALERT TRIGGERED — This is an ad-hoc cycle"). Alert cycles are exactly the case where you SHOULD trade immediately, even before 11:00 AM, because the price level you pre-committed to has been hit.
+9. HARD LOSS CAP: one position may never lose more than {max_position_loss_pct}% of effective capital. If breached between cycles, the system FORCE-SELLS it automatically and wakes you to re-plan. Size positions and stops so this never fires — it firing means your risk plan failed.
+10. No trades in Cycle 1 (the 9:30 AM scheduled slot). Market open is volatile and misleading — observe, research, plan. Trade from Cycle 2 onwards. EXCEPTION: this rule does NOT apply to ad-hoc cycles triggered by a price alert (the briefing will say "⚡ PRICE ALERT TRIGGERED — This is an ad-hoc cycle"). Alert cycles are exactly the case where you SHOULD trade immediately, even before 11:00 AM, because the price level you pre-committed to has been hit.
 
 NOTE: Call get_cash() to see your real drawdown_pct. Do NOT self-calculate drawdown — the number in get_cash() is authoritative. The executor enforces the halt limit automatically.
 
@@ -236,7 +237,9 @@ This is where you make money. Scan aggressively — opportunities exist EVERY cy
 
 HOW TO SCAN — do this every cycle:
 
-Step 1 — BATCH INDICATORS: Call get_indicators on a batch of 10-15 stocks. Pull from your watchlist AND stocks in the news today that you haven't added yet. If a news headline mentions a sector selloff or a specific company drop, add those names to the indicator batch.
+Step 0 — START FROM THE SCANNER LIST in your briefing. Every evening the system scans the ENTIRE NSE 500 with your exact band math and ranks the top setups — entry level, target, touch counts, gap %. These candidates already pass the arithmetic; your job is VERIFICATION (fresh price, news check, analyze_levels confirm), not discovery. A scanner pick you verify is worth more than a watchlist stock you hope about. If a scanner pick is not on your watchlist yet, add_to_watchlist(symbol, reason) first — the executor only trades watchlist symbols.
+
+Step 1 — BATCH INDICATORS: Call get_indicators on a batch of 10-15 stocks: top scanner picks first, then your watchlist and stocks in today's news. If a news headline mentions a sector selloff or a specific company drop, add those names to the indicator batch.
 
 Step 2 — FILTER FOR DIP CANDIDATES: From the batch results, filter for stocks where ANY of these are true:
   - 1-month return is negative (stock is down over the month)
@@ -392,6 +395,9 @@ Macro/World News: {macro_news}
 
 FII/DII Flows: {fii_dii}{outlook_section}
 
+🔎 SCANNER — top setups from full NSE-500 scan:
+{scanner_block}
+
 Watchlist: {watchlist_summary}
 
 Holdings: {open_positions}
@@ -463,6 +469,7 @@ class ContextBuilder:
             max_deployed=rules.max_deployed,
             daily_loss_limit=rules.daily_loss_limit,
             session_stop_loss=rules.session_stop_loss,
+            max_position_loss_pct=getattr(rules, "max_position_loss_pct", 1.5),
             watchlist_text=watchlist_text,
             watchlist_adjustment_block=watchlist_adjustment_block,
         )
@@ -677,6 +684,13 @@ class ContextBuilder:
         except Exception:
             lessons_block = "Unavailable."
 
+        # Full-market scanner results (computed post-close, zero tokens)
+        try:
+            from aaitrade.scanner import latest_scan_block
+            scanner_block = latest_scan_block()
+        except Exception:
+            scanner_block = "No scan available yet."
+
         return BRIEFING_TEMPLATE.format(
             cycle_number=cycle_number,
             regime_line=regime_line,
@@ -685,6 +699,7 @@ class ContextBuilder:
             macro_news=macro_news,
             fii_dii=fii_dii,
             outlook_section=outlook_section,
+            scanner_block=scanner_block,
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,
             lessons_block=lessons_block,
