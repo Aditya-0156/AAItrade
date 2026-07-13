@@ -93,6 +93,7 @@ export interface StartSessionParams {
   watchlist_path?: string
   allow_watchlist_adjustment?: boolean
   model?: string
+  planning_model?: string
   profit_reinvest_ratio?: number
   // Custom mode fields:
   custom_stop_loss?: number
@@ -101,6 +102,7 @@ export interface StartSessionParams {
   custom_max_per_trade?: number
   custom_max_deployed?: number
   custom_daily_loss_limit?: number
+  custom_max_position_loss?: number
 }
 
 export const startSession = (params: StartSessionParams) =>

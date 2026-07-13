@@ -88,6 +88,7 @@ class TradingServer:
         watchlist_path: str = "config/watchlist_seed.yaml",
         allow_watchlist_adjustment: bool = True,
         model: str = "claude-haiku-4-5-20251001",
+        planning_model: str = "claude-sonnet-5",
         profit_reinvest_ratio: float | None = None,
         # Custom risk params (only used when trading_mode == "custom"):
         custom_stop_loss: float | None = None,
@@ -96,6 +97,7 @@ class TradingServer:
         custom_max_per_trade: float | None = None,
         custom_max_deployed: float | None = None,
         custom_daily_loss_limit: float | None = None,
+        custom_max_position_loss: float | None = None,
     ) -> dict:
         """Start a new trading session in a background thread.
 
@@ -115,6 +117,7 @@ class TradingServer:
             watchlist_path=Path(watchlist_path),
             allow_watchlist_adjustment=allow_watchlist_adjustment,
             model=model,
+            planning_model=planning_model,
         )
 
         # Override risk_rules for custom mode
@@ -128,6 +131,7 @@ class TradingServer:
                 max_deployed=custom_max_deployed if custom_max_deployed is not None else base_rules.max_deployed,
                 daily_loss_limit=custom_daily_loss_limit if custom_daily_loss_limit is not None else base_rules.daily_loss_limit,
                 session_stop_loss=base_rules.session_stop_loss,
+                max_position_loss_pct=custom_max_position_loss if custom_max_position_loss is not None else base_rules.max_position_loss_pct,
             )
             config.risk_rules = custom_rules
 
@@ -295,12 +299,24 @@ class TradingServer:
         db_trading_mode = session["trading_mode"]
         config_trading_mode = db_trading_mode if db_trading_mode != "custom" else "balanced"
 
+        # Restore model choices from config_json (older sessions lack them)
+        model_kwargs = {}
+        try:
+            cfg = json.loads(session.get("config_json") or "{}")
+            if cfg.get("model"):
+                model_kwargs["model"] = cfg["model"]
+            if cfg.get("planning_model"):
+                model_kwargs["planning_model"] = cfg["planning_model"]
+        except Exception:
+            pass
+
         config = SessionConfig(
             execution_mode=ExecutionMode(session["execution_mode"]),
             trading_mode=TradingMode(config_trading_mode),
             starting_capital=session["starting_capital"],
             total_days=99999,
             watchlist_path=Path(session["watchlist_path"]),
+            **model_kwargs,
         )
 
         # Restore profit_reinvest_ratio from DB

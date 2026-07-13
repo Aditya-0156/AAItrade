@@ -86,15 +86,17 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
     name: '',
     execution_mode: 'paper',
     trading_mode: 'balanced',
-    starting_capital: 20000,
+    starting_capital: 100000,
     profit_reinvest_ratio: 0.5,
     model: 'claude-haiku-4-5-20251001',
+    planning_model: 'claude-sonnet-5',
     custom_stop_loss: 3.0,
     custom_take_profit: 5.0,
     custom_max_positions: 5,
     custom_max_per_trade: 20.0,
     custom_max_deployed: 90.0,
     custom_daily_loss_limit: 5.0,
+    custom_max_position_loss: 1.5,
   })
 
   const { data: presets } = useQuery({
@@ -197,20 +199,36 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {/* Model selector */}
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">AI Model</label>
-          <select
-            value={form.model}
-            onChange={(e) => setForm({ ...form, model: e.target.value })}
-            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
-          >
-            <option value="claude-haiku-4-5-20251001">Haiku (Fast, Cheap) — recommended</option>
-            <option value="claude-sonnet-4-5-20251001">Sonnet (Smarter, Slower)</option>
-          </select>
-          <p className="text-xs text-gray-600 mt-0.5">
-            Haiku runs faster and costs ~73% less. Sonnet gives better reasoning for complex markets.
-          </p>
+        {/* Model selectors: execution + planning tiers */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Execution Model (intraday cycles)</label>
+            <select
+              value={form.model}
+              onChange={(e) => setForm({ ...form, model: e.target.value })}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+            >
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5 (fast, cheap) — recommended</option>
+              <option value="claude-sonnet-5">Sonnet 5 (smarter, ~5x cost)</option>
+            </select>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Runs the 11:00 / 12:30 / 14:00 trade cycles — mostly mechanical verification.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Planning Model (9:30 cycle + weekend research)</label>
+            <select
+              value={form.planning_model}
+              onChange={(e) => setForm({ ...form, planning_model: e.target.value })}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+            >
+              <option value="claude-sonnet-5">Sonnet 5 — recommended (deep reasoning where it pays)</option>
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5 (cheapest — same as execution)</option>
+            </select>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Runs the morning plan, weekend outlook, and connection-graph research.
+            </p>
+          </div>
         </div>
 
         {/* Preset info (non-custom) */}
@@ -220,10 +238,16 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               {form.trading_mode.charAt(0).toUpperCase() + form.trading_mode.slice(1)} Mode Rules
             </div>
             <div>
-              Stop loss: {preset.stop_loss}% | Take profit: {preset.take_profit}% | Max per trade: {preset.max_per_trade}%
+              Stop alert: {preset.stop_loss}% | Target alert: {preset.take_profit}% | Max per trade: {preset.max_per_trade}%
             </div>
             <div>
               Max positions: {preset.max_positions} | Max deployed: {preset.max_deployed}% | Daily loss limit: {preset.daily_loss_limit}%
+            </div>
+            <div className="text-amber-400/80">
+              Hard loss cap: {preset.max_position_loss_pct ?? 1.5}% of capital per position (forced exit — Python-enforced)
+            </div>
+            <div className="text-gray-500">
+              Stop/target levels wake the AI for a judged decision (panic dips get held, broken stories get exited). Only the hard cap force-sells.
             </div>
           </div>
         )}
@@ -234,18 +258,25 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
             <div className="text-xs font-semibold text-gray-300 mb-2">Custom Risk Parameters</div>
 
             <NumberField
-              label="Stop Loss %"
-              description="Exit position automatically if it falls by this percentage. Lower = safer but more frequent stops."
+              label="Stop Alert %"
+              description="Below entry by this % -> the AI is woken for a judged decision (hold through panic, exit broken stories). NOT an auto-sell. 0 = disabled."
               value={form.custom_stop_loss ?? 3.0}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_stop_loss: v })}
             />
             <NumberField
-              label="Take Profit %"
-              description="Lock in gains when position rises by this percentage. Lower = more frequent smaller wins."
+              label="Target Alert %"
+              description="Above entry by this % -> the AI is woken to lock in the profit. 0 = disabled (AI sets its own targets)."
               value={form.custom_take_profit ?? 5.0}
               unit="%"
               onChange={(v) => setForm({ ...form, custom_take_profit: v })}
+            />
+            <NumberField
+              label="Hard Loss Cap (% of capital)"
+              description="FORCED exit if one position loses this % of total capital. Python-enforced, not negotiable. The rule that stops one runaway loser from erasing a month of small wins."
+              value={form.custom_max_position_loss ?? 1.5}
+              unit="%"
+              onChange={(v) => setForm({ ...form, custom_max_position_loss: v })}
             />
             <NumberField
               label="Max Open Positions"

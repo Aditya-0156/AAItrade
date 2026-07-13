@@ -101,6 +101,8 @@ class SessionManager:
                 "starting_capital": self.config.starting_capital,
                 "total_days": self.config.total_days,
                 "decision_interval_minutes": self.config.decision_interval_minutes,
+                "model": getattr(self.config, "model", None),
+                "planning_model": getattr(self.config, "planning_model", None),
             }),
         })
 
@@ -246,7 +248,24 @@ class SessionManager:
                     self._price_monitor.set_kite_client(kite)
             except Exception as e:
                 if is_live:
-                    raise RuntimeError(f"Kite Connect initialization failed: {e}. Check .env keys.")
+                    # Don't refuse to start — Kite tokens die daily, and sessions
+                    # are often started on weekends/evenings for the next open.
+                    # The session runs (research, scans, briefings via yfinance);
+                    # the pre-market token check nags via Telegram until /token
+                    # arrives, and update_kite_token() injects it live.
+                    logger.warning(
+                        f"LIVE session starting WITHOUT a working Kite token: {e}. "
+                        "Trading will fail until the token is updated — send /token "
+                        "before market open."
+                    )
+                    bot = get_bot()
+                    if bot:
+                        bot.send(
+                            "⚠️ LIVE session started with a dead Kite token. "
+                            "Research and scans will run, but NO trades can execute "
+                            "until you send /token <request_token> (before 9:15 AM).",
+                            parse_mode=None,
+                        )
                 else:
                     logger.warning(
                         f"Kite Connect unavailable (token expired?): {e}. "

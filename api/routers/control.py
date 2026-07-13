@@ -27,7 +27,8 @@ class StartSessionRequest(BaseModel):
     starting_capital: float = 20000.0
     watchlist_path: str = "config/watchlist_seed.yaml"
     allow_watchlist_adjustment: bool = True
-    model: str = "claude-haiku-4-5-20251001"
+    model: str = "claude-haiku-4-5-20251001"          # execution cycles
+    planning_model: str = "claude-sonnet-5"           # 9:30 planning + weekend research
     profit_reinvest_ratio: float = 0.5
     # Custom mode risk params (only used when trading_mode == "custom")
     custom_stop_loss: Optional[float] = None
@@ -36,6 +37,7 @@ class StartSessionRequest(BaseModel):
     custom_max_per_trade: Optional[float] = None
     custom_max_deployed: Optional[float] = None
     custom_daily_loss_limit: Optional[float] = None
+    custom_max_position_loss: Optional[float] = None  # hard per-position loss cap (% of capital)
 
 
 class TokenUpdateRequest(BaseModel):
@@ -85,6 +87,7 @@ async def start_session(req: StartSessionRequest):
         watchlist_path=req.watchlist_path,
         allow_watchlist_adjustment=req.allow_watchlist_adjustment,
         model=req.model,
+        planning_model=req.planning_model,
         profit_reinvest_ratio=req.profit_reinvest_ratio,
         custom_stop_loss=req.custom_stop_loss,
         custom_take_profit=req.custom_take_profit,
@@ -92,6 +95,7 @@ async def start_session(req: StartSessionRequest):
         custom_max_per_trade=req.custom_max_per_trade,
         custom_max_deployed=req.custom_max_deployed,
         custom_daily_loss_limit=req.custom_daily_loss_limit,
+        custom_max_position_loss=req.custom_max_position_loss,
     )
 
     if "error" in result:
@@ -290,6 +294,7 @@ async def get_presets():
             "max_deployed": rules.max_deployed,
             "daily_loss_limit": rules.daily_loss_limit,
             "session_stop_loss": rules.session_stop_loss,
+            "max_position_loss_pct": rules.max_position_loss_pct,
             "suggested_reinvest_ratio": PROFIT_REINVEST_RATIO[mode],
         }
     return presets
