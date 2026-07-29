@@ -774,6 +774,13 @@ class SessionManager:
         logger.info("Running pre-market tasks...")
         bot = get_bot()
 
+        # 0. Record the monthly broker-API subscription (idempotent per month)
+        try:
+            from aaitrade.costs import ensure_monthly_subscription
+            ensure_monthly_subscription(self.session_id)
+        except Exception as e:
+            logger.warning(f"Subscription expense record failed: {e}")
+
         # 1. Kite token health check — Kite tokens die every morning (~7:30 AM IST).
         #    Catching this BEFORE market open beats discovering it mid-trade.
         from aaitrade.kite_auth import check_token_health
@@ -824,18 +831,31 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"FII/DII prefetch failed: {e}")
 
-        # 4. Portfolio sync (live only)
+        # 4. Portfolio reconciliation (live only) — READ-ONLY, never mutates
         if is_live:
             try:
                 from aaitrade.portfolio_sync import sync_portfolio_with_kite
                 if _kite:
-                    sync_result = sync_portfolio_with_kite(self.session_id, _kite)
-                    if sync_result.get("discrepancies"):
-                        if bot:
-                            n = len(sync_result["discrepancies"])
-                            bot.send(f"📊 Portfolio sync: {n} discrepancy(ies) corrected")
+                    report = sync_portfolio_with_kite(self.session_id, _kite)
+                    warnings = report.get("warnings") or []
+                    if warnings and bot:
+                        lines = "\n".join(
+                            f"• {w['symbol']}: system thinks {w['db_qty']}, broker has {w['broker_qty']}"
+                            for w in warnings
+                        )
+                        bot.send(
+                            f"⚠️ Portfolio mismatch (NOT auto-corrected):\n{lines}\n"
+                            f"The system will not sell more than it owns, but investigate.",
+                            parse_mode=None,
+                        )
+                    ext = report.get("external_holdings") or []
+                    if ext:
+                        logger.info(
+                            "Your personal holdings the system ignores: "
+                            + ", ".join(f"{e['symbol']} x{e['external_qty']}" for e in ext)
+                        )
             except Exception as e:
-                logger.error(f"Portfolio sync failed: {e}")
+                logger.error(f"Portfolio reconciliation failed: {e}")
 
     def _maybe_run_offday_research(self, now: datetime):
         """On weekends/holidays after 17:30 IST, run the research cycle once.

@@ -128,6 +128,16 @@ def recent_lessons_block(session_id: int, limit: int = 5) -> str:
     """
     lines = [f"Performance: {performance_stats(session_id)}"]
     try:
+        from aaitrade.costs import expense_summary
+        e = expense_summary(session_id)
+        lines.append(
+            f"Running costs: API ₹{e['api_cost']:,.0f} + subscriptions ₹{e['subscriptions']:,.0f} "
+            f"→ NET after everything: ₹{e['net_profit_after_all_expenses']:,.0f} "
+            f"(this is the number that matters)"
+        )
+    except Exception:
+        pass
+    try:
         rows = db.query(
             "SELECT lesson FROM lessons "
             "WHERE (session_id = ? OR category = 'insight') "

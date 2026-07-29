@@ -79,6 +79,29 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Ensure expense-tracking tables exist (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS api_usage ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, "
+                "cycle_number INTEGER, model TEXT NOT NULL, purpose TEXT, "
+                "input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, "
+                "cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, "
+                "cost_inr REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_api_usage_session ON api_usage(session_id, created_at)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS expenses ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, "
+                "category TEXT NOT NULL, label TEXT NOT NULL, amount_inr REAL NOT NULL, "
+                "period TEXT, created_at TEXT NOT NULL, UNIQUE(category, label, period))"
+            )
+    except Exception:
+        pass
+
     # Ensure knowledge-layer tables exist (for existing DBs)
     try:
         with get_connection() as conn:
@@ -320,6 +343,36 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+-- Every Claude API call's token usage and computed cost (INR).
+CREATE TABLE IF NOT EXISTS api_usage (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          INTEGER,
+    cycle_number        INTEGER,
+    model               TEXT NOT NULL,
+    purpose             TEXT,               -- cycle / research / summary / notify
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+    cost_inr            REAL NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_usage_session ON api_usage(session_id, created_at);
+
+-- Non-trading expenses: subscriptions and manual entries.
+-- (Per-trade brokerage/STT/DP charges live on the trades table.)
+CREATE TABLE IF NOT EXISTS expenses (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER,
+    category    TEXT NOT NULL,              -- subscription / api / other
+    label       TEXT NOT NULL,
+    amount_inr  REAL NOT NULL,
+    period      TEXT,                       -- YYYY-MM for recurring items
+    created_at  TEXT NOT NULL,
+    UNIQUE(category, label, period)
+);
 
 -- Full-market structure: every NSE-500 company with its sector.
 -- Lets the system map "policy theme" -> industry/company-name -> symbols

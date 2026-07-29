@@ -6,6 +6,7 @@ import {
   BookOpen,
   Settings,
   TrendingUp,
+  Wallet,
 } from 'lucide-react'
 
 const navItems = [
@@ -13,6 +14,7 @@ const navItems = [
   { to: '/sessions', label: 'Sessions', icon: BarChart3, end: false },
   { to: '/activity', label: 'Activity', icon: Activity, end: false },
   { to: '/deep-dive', label: 'Deep Dive', icon: BookOpen, end: false },
+  { to: '/expenses', label: 'Expenses', icon: Wallet, end: false },
   { to: '/control', label: 'Command Center', icon: Settings, end: false },
 ]
 

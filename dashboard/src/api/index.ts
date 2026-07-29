@@ -141,3 +141,25 @@ export async function updateSessionSettings(sessionId: number, settings: Record<
   const { data } = await client.put(`/api/control/sessions/${sessionId}/settings`, settings)
   return data
 }
+
+// ── Expenses ──────────────────────────────────────────────────────────────
+
+export const fetchExpenseSummary = (sessionId?: number) =>
+  client
+    .get('/api/expenses/summary', { params: sessionId ? { session_id: sessionId } : {} })
+    .then((r) => r.data)
+
+export const fetchDailyCosts = (days = 14) =>
+  client.get('/api/expenses/daily', { params: { days } }).then((r) => r.data)
+
+export const fetchApiUsage = (sessionId?: number, limit = 25) =>
+  client
+    .get('/api/expenses/api-usage', {
+      params: { ...(sessionId ? { session_id: sessionId } : {}), limit },
+    })
+    .then((r) => r.data)
+
+export const fetchExpenseList = () => client.get('/api/expenses/list').then((r) => r.data)
+
+export const addManualExpense = (params: { label: string; amount_inr: number; category?: string }) =>
+  client.post('/api/expenses/manual', params).then((r) => r.data)

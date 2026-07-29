@@ -1,8 +1,20 @@
-"""Portfolio sync — reconciles AAItrade DB with real Zerodha holdings.
+"""Portfolio reconciliation — compares AAItrade's DB with Zerodha holdings.
 
-For live trading, this runs once daily (pre-market) to ensure the DB
-portfolio table matches actual Kite holdings. Catches discrepancies
-from partial fills, manual trades, or system errors.
+CRITICAL OWNERSHIP RULE
+───────────────────────
+The AAItrade DB is the ONLY source of truth for what this system owns.
+The Zerodha account also holds the user's PERSONAL trades (e.g. 254 HDFCBANK
+bought by hand). Those must never be touched, sold, counted as P&L, or
+adopted into the system's portfolio.
+
+Therefore this module is REPORT-ONLY:
+- It NEVER inserts a Kite holding into the portfolio table (that would steal
+  the user's personal shares — HDFCBANK is on the seed watchlist, so the old
+  "adopt watchlist symbols" behaviour would have done exactly that).
+- It NEVER deletes a DB position because Kite doesn't show it.
+- It NEVER edits avg_price or quantity.
+It only warns when Kite holds FEWER shares than the system thinks it owns —
+the one case that actually breaks the system's ability to sell.
 """
 
 from __future__ import annotations
@@ -18,12 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 def sync_portfolio_with_kite(session_id: int, kite) -> dict:
-    """Sync a session's portfolio with real Zerodha holdings.
+    """Reconcile (read-only) the session's portfolio against Zerodha holdings.
 
-    Compares DB portfolio table with Kite's holdings API.
-    Returns a report of discrepancies found and corrections made.
-
-    Only runs for LIVE mode sessions.
+    Returns a report. Makes NO writes to the portfolio table.
     """
     session = db.query_one(
         "SELECT id, execution_mode FROM sessions WHERE id = ?",
@@ -32,112 +41,95 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
     if not session:
         return {"error": "Session not found"}
     if session["execution_mode"] != "live":
-        return {"status": "skipped", "reason": "Paper mode — no sync needed"}
+        return {"status": "skipped", "reason": "Paper mode — no reconciliation needed"}
 
-    discrepancies = []
+    warnings: list[dict] = []
+    external: list[dict] = []
 
     try:
-        # Get real holdings from Kite
         kite_holdings = kite.holdings()
-        kite_positions = {h["tradingsymbol"]: h for h in kite_holdings if h.get("quantity", 0) > 0}
+        # Total broker quantity = settled + T1 (bought today, not yet settled)
+        kite_qty: dict[str, int] = {}
+        for h in kite_holdings:
+            total = (h.get("quantity") or 0) + (h.get("t1_quantity") or 0)
+            if total > 0:
+                kite_qty[h["tradingsymbol"]] = total
 
-        # Get DB portfolio
         db_positions = db.query(
             "SELECT id, symbol, quantity, avg_price FROM portfolio WHERE session_id = ?",
             (session_id,),
         )
         db_map = {p["symbol"]: p for p in db_positions}
 
-        # Check each DB position against Kite
-        for symbol, db_pos in db_map.items():
-            if symbol in kite_positions:
-                kite_pos = kite_positions[symbol]
-                kite_qty = kite_pos.get("quantity", 0)
-                kite_avg = kite_pos.get("average_price", 0)
-
-                if kite_qty != db_pos["quantity"]:
-                    discrepancies.append({
-                        "symbol": symbol,
-                        "type": "quantity_mismatch",
-                        "db_qty": db_pos["quantity"],
-                        "kite_qty": kite_qty,
-                        "action": "updated_db",
-                    })
-                    db.update("portfolio", db_pos["id"], {"quantity": kite_qty})
-                    logger.warning(
-                        f"SYNC: {symbol} quantity mismatch — "
-                        f"DB: {db_pos['quantity']}, Kite: {kite_qty}. Updated DB."
-                    )
-
-                if abs(kite_avg - db_pos["avg_price"]) > 0.5:
-                    discrepancies.append({
-                        "symbol": symbol,
-                        "type": "price_mismatch",
-                        "db_avg": db_pos["avg_price"],
-                        "kite_avg": kite_avg,
-                        "action": "updated_db",
-                    })
-                    db.update("portfolio", db_pos["id"], {"avg_price": round(kite_avg, 2)})
-                    logger.warning(
-                        f"SYNC: {symbol} avg price mismatch — "
-                        f"DB: ₹{db_pos['avg_price']}, Kite: ₹{kite_avg}. Updated DB."
-                    )
-            else:
-                # Position in DB but not in Kite — was sold outside the system
-                discrepancies.append({
+        # 1. Every system position must be BACKED by at least that many shares
+        #    in the broker account. Fewer = the system cannot sell what it thinks
+        #    it owns (manual sale, partial fill, or a mis-recorded trade).
+        for symbol, pos in db_map.items():
+            broker = kite_qty.get(symbol, 0)
+            if broker < pos["quantity"]:
+                warnings.append({
                     "symbol": symbol,
-                    "type": "missing_in_kite",
-                    "db_qty": db_pos["quantity"],
-                    "action": "removed_from_db",
+                    "type": "under_backed",
+                    "db_qty": pos["quantity"],
+                    "broker_qty": broker,
                 })
-                with db.get_connection() as conn:
-                    conn.execute("DELETE FROM portfolio WHERE id = ?", (db_pos["id"],))
-                logger.warning(
-                    f"SYNC: {symbol} in DB but not in Kite — removed from DB."
+                logger.error(
+                    f"RECONCILE: {symbol} — system DB says {pos['quantity']} shares but "
+                    f"broker shows only {broker}. NOT auto-corrected. Investigate before "
+                    f"the system tries to sell."
                 )
 
-        # Check for Kite positions not in DB (manual buys)
-        watchlist_symbols = {
-            w["symbol"] for w in db.query(
-                "SELECT symbol FROM watchlist WHERE session_id = ? AND removed_at IS NULL",
-                (session_id,),
+        # 2. Everything the broker holds beyond what the system bought is the
+        #    USER'S OWN. Log it as external so it's visible, never adopt it.
+        for symbol, broker in kite_qty.items():
+            owned = db_map[symbol]["quantity"] if symbol in db_map else 0
+            if broker > owned:
+                external.append({
+                    "symbol": symbol,
+                    "external_qty": broker - owned,
+                    "system_qty": owned,
+                })
+
+        if external:
+            logger.info(
+                "RECONCILE: external (user-owned) holdings ignored by the system: "
+                + ", ".join(f"{e['symbol']} x{e['external_qty']}" for e in external)
             )
-        }
-        for symbol, kite_pos in kite_positions.items():
-            if symbol not in db_map and symbol in watchlist_symbols:
-                discrepancies.append({
-                    "symbol": symbol,
-                    "type": "missing_in_db",
-                    "kite_qty": kite_pos["quantity"],
-                    "action": "added_to_db",
-                })
-                db.insert("portfolio", {
-                    "session_id": session_id,
-                    "symbol": symbol,
-                    "quantity": kite_pos["quantity"],
-                    "avg_price": round(kite_pos.get("average_price", 0), 2),
-                    "stop_loss_price": None,
-                    "take_profit_price": None,
-                    "opened_at": db.now_iso(),
-                })
-                logger.warning(
-                    f"SYNC: {symbol} in Kite but not in DB — added to DB. "
-                    f"(qty={kite_pos['quantity']}, avg=₹{kite_pos.get('average_price', 0):.2f})"
-                )
 
-        # NOTE: Do NOT sync current_capital with Kite margins!
-        # Reason: Zerodha account may have money unrelated to this session.
-        # Current capital is tracked internally by the system (gains/losses from trades).
-        # We only sync positions (holdings), not cash balance.
+        # NOTE: current_capital is NEVER synced with Kite margins — the Zerodha
+        # account holds the user's own money and manual positions. The system's
+        # capital is tracked internally from its own trades only.
 
     except Exception as e:
-        logger.error(f"Portfolio sync failed: {e}", exc_info=True)
+        logger.error(f"Portfolio reconciliation failed: {e}", exc_info=True)
         return {"error": str(e)}
 
-    status = "synced" if not discrepancies else "corrected"
-    logger.info(f"Portfolio sync complete: {len(discrepancies)} discrepancy(ies) found")
+    status = "ok" if not warnings else "warnings"
+    logger.info(
+        f"Portfolio reconciliation: {len(warnings)} warning(s), "
+        f"{len(external)} external holding(s) ignored"
+    )
     return {
         "status": status,
-        "discrepancies": discrepancies,
+        "warnings": warnings,
+        "external_holdings": external,
+        "read_only": True,
         "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+
+def external_holdings_note(session_id: int, kite) -> str:
+    """One-line briefing note listing user-owned shares the system must ignore."""
+    try:
+        report = sync_portfolio_with_kite(session_id, kite)
+        ext = report.get("external_holdings") or []
+        if not ext:
+            return ""
+        items = ", ".join(f"{e['symbol']} x{e['external_qty']}" for e in ext)
+        return (
+            f"\n\n🔒 NOT YOURS (the user's own holdings in the same Zerodha account): {items}. "
+            f"These are invisible to your portfolio and P&L. NEVER sell them — only sell "
+            f"positions that appear in get_portfolio()."
+        )
+    except Exception:
+        return ""

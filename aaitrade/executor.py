@@ -556,7 +556,24 @@ class Executor:
         if not position:
             return {"status": "rejected", "reason": f"No position in {symbol} to sell"}
 
-        quantity = decision.get("quantity") or position["quantity"]  # default: sell all
+        # OWNERSHIP GUARD — the DB is the only source of truth for what this
+        # system owns. The same Zerodha account also holds the user's personal
+        # shares (e.g. hand-bought HDFCBANK); selling more than the system
+        # bought would liquidate THEIR shares. Hard-clamp to the DB quantity.
+        requested = decision.get("quantity") or position["quantity"]  # default: sell all
+        try:
+            requested = int(requested)
+        except (TypeError, ValueError):
+            return {"status": "rejected", "reason": f"Invalid SELL quantity: {requested!r}"}
+        if requested <= 0:
+            return {"status": "rejected", "reason": "SELL quantity must be at least 1"}
+        quantity = min(requested, position["quantity"])
+        if requested > position["quantity"]:
+            logger.warning(
+                f"SELL {symbol}: requested {requested} but the system only owns "
+                f"{position['quantity']} — clamped. (Any additional shares in the "
+                f"Zerodha account belong to the user and are never sellable.)"
+            )
 
         # Warn if multiple live sessions hold the same symbol (Zerodha collision risk)
         if self.config.execution_mode == ExecutionMode.LIVE:

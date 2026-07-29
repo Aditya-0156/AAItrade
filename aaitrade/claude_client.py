@@ -167,10 +167,17 @@ class ClaudeClient:
                 messages.append({"role": "user", "content": tool_results})
 
             elif response.stop_reason == "end_turn":
+                cost = 0.0
+                try:
+                    from aaitrade.costs import record_api_usage
+                    cost = record_api_usage(session_id, cycle_number, model, usage_totals)
+                except Exception:
+                    pass
                 logger.info(
                     f"Cycle {cycle_number} token usage: "
                     f"in={usage_totals['input']:,} out={usage_totals['output']:,} "
-                    f"cache_read={usage_totals['cache_read']:,} cache_write={usage_totals['cache_write']:,}"
+                    f"cache_read={usage_totals['cache_read']:,} cache_write={usage_totals['cache_write']:,} "
+                    f"| cost ₹{cost:.2f}"
                 )
                 # Claude is done — extract the final text
                 decision_text = ""
@@ -205,6 +212,11 @@ class ClaudeClient:
 
         # Tool round limit reached — any execute_trade calls already ran and are committed
         # to DB. Any pending retries on rejected trades will appear in next cycle's briefing.
+        try:
+            from aaitrade.costs import record_api_usage
+            record_api_usage(session_id, cycle_number, model, usage_totals)
+        except Exception:
+            pass
         logger.warning(f"Cycle {cycle_number}: exhausted {self.max_tool_rounds} tool rounds")
         fallback = {"action": "HOLD", "symbol": None, "quantity": None,
                     "stop_loss_price": None, "take_profit_price": None,
