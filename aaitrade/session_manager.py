@@ -416,6 +416,12 @@ class SessionManager:
         today_str = now.strftime("%Y-%m-%d")
         candidates: list[tuple[datetime, str]] = []
 
+        # Today's pre-market window — so the Kite token health check and its
+        # Telegram warning land BEFORE the 9:15 open, not at the 9:30 cycle.
+        premarket = now.replace(hour=8, minute=55, second=0, microsecond=0)
+        if premarket > now and self._premarket_done_date != today_str:
+            candidates.append((premarket, "pre-market checks"))
+
         for h, m in self.CYCLE_SLOTS:
             slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
             if slot_time > now:
