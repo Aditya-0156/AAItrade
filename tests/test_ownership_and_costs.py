@@ -194,9 +194,10 @@ class TestSymbolExclusion:
         assert "HDFCBANK" in result["added"]
         assert excluded_symbol_set(session_with_watchlist) == {"HDFCBANK"}
 
-    def test_buy_blocked_on_excluded_symbol(self, in_memory_db, balanced_config, session_with_watchlist):
+    def test_buy_blocked_when_separation_enabled(self, in_memory_db, balanced_config, session_with_watchlist):
         from aaitrade.exclusions import add_exclusion
         add_exclusion(session_with_watchlist, "HDFCBANK", "user owns", 254)
+        balanced_config.exclude_user_symbols = True  # opt-in strict separation
         ex = Executor(balanced_config, session_with_watchlist)
         with patch("aaitrade.tools.market.get_current_price", return_value=make_price("HDFCBANK", 800)):
             result = ex.execute({
@@ -206,9 +207,10 @@ class TestSymbolExclusion:
         assert result["status"] == "rejected"
         assert "OFF-LIMITS" in result["reason"]
 
-    def test_sell_blocked_on_excluded_symbol(self, in_memory_db, balanced_config, session_with_watchlist):
+    def test_sell_blocked_when_separation_enabled(self, in_memory_db, balanced_config, session_with_watchlist):
         from aaitrade.exclusions import add_exclusion
         add_exclusion(session_with_watchlist, "HDFCBANK", "user owns", 254)
+        balanced_config.exclude_user_symbols = True  # opt-in strict separation
         db.insert("portfolio", {
             "session_id": session_with_watchlist, "symbol": "HDFCBANK",
             "quantity": 5, "avg_price": 800.0,
@@ -290,3 +292,41 @@ class TestProfitReinvestSplit:
         # cost basis 30000 returned + half the profit reinvested
         assert s["current_capital"] == pytest.approx(100000 + 30000 + profit * 0.5)
         assert s["secured_profit"] == pytest.approx(profit * 0.5)
+
+
+class TestSharedSymbolDefault:
+    """Default: the system MAY trade a symbol the user also holds. Its books
+    stay separate — it only ever sells its own quantity."""
+
+    def test_can_buy_symbol_user_also_holds(self, in_memory_db, balanced_config, session_with_watchlist):
+        from aaitrade.exclusions import add_exclusion
+        add_exclusion(session_with_watchlist, "HDFCBANK", "user owns 254", 254)
+        assert balanced_config.exclude_user_symbols is False
+        ex = Executor(balanced_config, session_with_watchlist)
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("HDFCBANK", 800)):
+            result = ex.execute({
+                "action": "BUY", "symbol": "HDFCBANK", "quantity": 5,
+                "reason": "valid setup", "confidence": "high", "flags": [],
+            })
+        assert result["status"] == "executed"
+        pos = db.query_one(
+            "SELECT quantity FROM portfolio WHERE session_id = ? AND symbol = 'HDFCBANK'",
+            (session_with_watchlist,),
+        )
+        assert pos["quantity"] == 5, "system books only its own 5, never the user's 254"
+
+    def test_sell_still_clamped_to_own_quantity(self, in_memory_db, balanced_config, session_with_watchlist):
+        """Even on a shared symbol, the system can never reach the user's shares."""
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "HDFCBANK",
+            "quantity": 5, "avg_price": 800.0,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        ex = Executor(balanced_config, session_with_watchlist)
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("HDFCBANK", 810)):
+            result = ex.execute({
+                "action": "SELL", "symbol": "HDFCBANK", "quantity": 259,
+                "reason": "test", "confidence": "high", "flags": [],
+            })
+        assert result["quantity"] == 5

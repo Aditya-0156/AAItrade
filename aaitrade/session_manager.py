@@ -115,7 +115,7 @@ class SessionManager:
                 self._init_clients()
                 self._clients_ready = True
                 from aaitrade.tools.market import _kite
-                if _kite:
+                if _kite and getattr(self.config, "exclude_user_symbols", False):
                     from aaitrade.exclusions import refresh_from_broker
                     result = refresh_from_broker(self.session_id, _kite, initial=True)
                     excluded = set(result.get("excluded", []))
@@ -862,7 +862,7 @@ class SessionManager:
 
         # 3b. Refresh personal-holding exclusions — catches anything the user
         #     bought by hand since yesterday, and releases what they sold.
-        if is_live and _kite:
+        if is_live and _kite and getattr(self.config, "exclude_user_symbols", False):
             try:
                 from aaitrade.exclusions import refresh_from_broker
                 result = refresh_from_broker(self.session_id, _kite)

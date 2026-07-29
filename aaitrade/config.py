@@ -168,6 +168,16 @@ class SessionConfig:
     # Haiku cycles combined; set equal to `model` to disable tiering.
     planning_model: str = "claude-sonnet-5"
     profit_reinvest_ratio: float = 0.5  # 0.0=secure all profit, 1.0=reinvest all profit
+    # Symbol separation from the user's own manual trading.
+    # False (default): the system MAY trade the same symbols the user holds.
+    #   Its books stay fully separate — it only ever sells what it itself
+    #   bought, never adopts the user's shares, never counts them in P&L.
+    #   Caveat the user has accepted: the broker pools shares per symbol and
+    #   disposes FIFO, so a system sell in a shared symbol is booked against
+    #   the user's older tax lots (share count and money are unaffected).
+    # True: the system refuses to trade any symbol the user holds.
+    exclude_user_symbols: bool = False
+
     # Apply realistic Zerodha CNC charges (STT, stamp, DP, slippage) to paper
     # trades. Without this, paper P&L overstates reality — the 0.5-1% profit
     # targets get materially eaten by ~0.25-0.5% round-trip costs on small trades.

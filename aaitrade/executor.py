@@ -87,7 +87,7 @@ class Executor:
         # The broker pools shares per symbol and disposes FIFO, so any trade
         # here would move the user's own shares, cost basis, and tax lots.
         symbol = decision.get("symbol")
-        if symbol and action in ("BUY", "SELL"):
+        if symbol and action in ("BUY", "SELL") and getattr(self.config, "exclude_user_symbols", False):
             try:
                 from aaitrade.exclusions import is_excluded
                 if is_excluded(self.session_id, symbol):

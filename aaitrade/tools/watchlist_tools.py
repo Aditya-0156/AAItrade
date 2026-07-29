@@ -88,7 +88,7 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
     # Off-limits: the user holds this symbol personally in the same account
     try:
         from aaitrade.exclusions import is_excluded
-        if is_excluded(_session_id, symbol):
+        if is_excluded(_session_id, symbol):  # only populated when separation is enabled
             return {
                 "status": "rejected",
                 "symbol": symbol,
