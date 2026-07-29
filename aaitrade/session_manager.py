@@ -106,9 +106,33 @@ class SessionManager:
             }),
         })
 
-        # Load watchlist into DB
+        # Initialize clients early for live sessions so the broker account can be
+        # read BEFORE the watchlist is built (we must know which symbols are the
+        # user's own before offering any of them to the trading engine).
+        excluded: set[str] = set()
+        if self.config.execution_mode == ExecutionMode.LIVE:
+            try:
+                self._init_clients()
+                self._clients_ready = True
+                from aaitrade.tools.market import _kite
+                if _kite:
+                    from aaitrade.exclusions import refresh_from_broker
+                    result = refresh_from_broker(self.session_id, _kite, initial=True)
+                    excluded = set(result.get("excluded", []))
+                    if excluded:
+                        logger.warning(
+                            f"User's personal holdings excluded from trading: {', '.join(sorted(excluded))}"
+                        )
+            except Exception as e:
+                logger.error(f"Could not snapshot personal holdings at start: {e}")
+
+        # Load watchlist into DB, skipping the user's own symbols
         watchlist = load_watchlist(self.config.watchlist_path)
+        skipped = []
         for entry in watchlist:
+            if entry.symbol in excluded:
+                skipped.append(entry.symbol)
+                continue
             db.insert("watchlist", {
                 "session_id": self.session_id,
                 "symbol": entry.symbol,
@@ -119,7 +143,10 @@ class SessionManager:
                 "add_reason": "Seed watchlist",
             })
 
-        logger.info(f"Loaded {len(watchlist)} stocks into watchlist")
+        logger.info(
+            f"Loaded {len(watchlist) - len(skipped)} stocks into watchlist"
+            + (f" (skipped user-owned: {', '.join(skipped)})" if skipped else "")
+        )
 
         # Load tool registry
         load_all_tools()
@@ -139,8 +166,10 @@ class SessionManager:
         session_analysis.set_session_id(self.session_id)
         price_alerts.set_alert_context(self.session_id, 0)
 
-        # Initialize clients
-        self._init_clients()
+        # Initialize clients (already done above for live sessions)
+        if not getattr(self, "_clients_ready", False):
+            self._init_clients()
+            self._clients_ready = True
 
         # Validate watchlist symbols against Kite instrument cache
         self._validate_watchlist()
@@ -830,6 +859,33 @@ class SessionManager:
             get_fiidii_flows()
         except Exception as e:
             logger.warning(f"FII/DII prefetch failed: {e}")
+
+        # 3b. Refresh personal-holding exclusions — catches anything the user
+        #     bought by hand since yesterday, and releases what they sold.
+        if is_live and _kite:
+            try:
+                from aaitrade.exclusions import refresh_from_broker
+                result = refresh_from_broker(self.session_id, _kite)
+                if result.get("added"):
+                    syms = ", ".join(result["added"])
+                    logger.warning(f"New personal holdings excluded from trading: {syms}")
+                    # Drop them from the watchlist so they can't be scanned
+                    with db.get_connection() as conn:
+                        for sym in result["added"]:
+                            conn.execute(
+                                "UPDATE watchlist SET removed_at = ?, remove_reason = ? "
+                                "WHERE session_id = ? AND symbol = ? AND removed_at IS NULL",
+                                (db.now_iso(), "User holds this personally", self.session_id, sym),
+                            )
+                    if bot:
+                        bot.send(
+                            f"🔒 Excluded from system trading (you own these): {syms}",
+                            parse_mode=None,
+                        )
+                if result.get("released"):
+                    logger.info(f"Exclusions lifted: {', '.join(result['released'])}")
+            except Exception as e:
+                logger.error(f"Exclusion refresh failed: {e}")
 
         # 4. Portfolio reconciliation (live only) — READ-ONLY, never mutates
         if is_live:

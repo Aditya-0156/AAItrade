@@ -266,15 +266,27 @@ def run_daily_scan(max_symbols: int = 520) -> dict:
                 "saved": len(top), "minutes": round(elapsed / 60, 1)}
 
 
-def latest_scan_block(limit: int = 15) -> str:
-    """Briefing-ready table of the most recent scan's top setups."""
+def latest_scan_block(limit: int = 15, session_id: int | None = None) -> str:
+    """Briefing-ready table of the most recent scan's top setups.
+
+    Symbols the user holds personally are filtered out — they can never be
+    traded, so showing them would only waste the agent's attention.
+    """
     latest = db.query_one("SELECT MAX(scan_date) as d FROM scan_results")
     if not latest or not latest["d"]:
         return "No scan available yet."
     rows = db.query(
         "SELECT * FROM scan_results WHERE scan_date = ? ORDER BY rank LIMIT ?",
-        (latest["d"], limit),
+        (latest["d"], limit * 2),
     )
+    if session_id is not None:
+        try:
+            from aaitrade.exclusions import excluded_symbol_set
+            blocked = excluded_symbol_set(session_id)
+            rows = [r for r in rows if r["symbol"] not in blocked]
+        except Exception:
+            pass
+    rows = rows[:limit]
     if not rows:
         return "No scan available yet."
     lines = [

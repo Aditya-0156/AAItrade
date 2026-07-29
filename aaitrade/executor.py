@@ -83,6 +83,26 @@ class Executor:
         if action == "HOLD":
             return {"status": "hold", "reason": decision.get("reason", "")}
 
+        # OWNERSHIP GATE — never trade a symbol the user holds personally.
+        # The broker pools shares per symbol and disposes FIFO, so any trade
+        # here would move the user's own shares, cost basis, and tax lots.
+        symbol = decision.get("symbol")
+        if symbol and action in ("BUY", "SELL"):
+            try:
+                from aaitrade.exclusions import is_excluded
+                if is_excluded(self.session_id, symbol):
+                    logger.warning(f"BLOCKED {action} {symbol} — user's personal holding")
+                    return {
+                        "status": "rejected",
+                        "reason": (
+                            f"{symbol} is OFF-LIMITS — the user holds it personally in this "
+                            f"account. The system never trades symbols the user owns. "
+                            f"Pick a different stock."
+                        ),
+                    }
+            except Exception as e:
+                logger.error(f"Exclusion check failed for {symbol}: {e}")
+
         if action == "BUY":
             return self._execute_buy(decision)
         elif action == "SELL":

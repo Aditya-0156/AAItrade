@@ -85,6 +85,21 @@ def add_to_watchlist(symbol: str, reason: str) -> dict:
     _require_session()
     symbol = symbol.upper().strip()
 
+    # Off-limits: the user holds this symbol personally in the same account
+    try:
+        from aaitrade.exclusions import is_excluded
+        if is_excluded(_session_id, symbol):
+            return {
+                "status": "rejected",
+                "symbol": symbol,
+                "reason": (
+                    f"{symbol} is OFF-LIMITS — the user trades it personally in this "
+                    f"account. It can never be added or traded. Choose another stock."
+                ),
+            }
+    except Exception:
+        pass
+
     # Check max size
     current_count = db.query(
         "SELECT COUNT(*) as count FROM watchlist "

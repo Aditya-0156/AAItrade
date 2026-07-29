@@ -79,7 +79,19 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
-    # Ensure expense-tracking tables exist (for existing DBs)
+    # Ensure exclusion + expense tables exist (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS excluded_symbols ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, "
+                "symbol TEXT NOT NULL, external_qty INTEGER NOT NULL DEFAULT 0, "
+                "reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+                "UNIQUE(session_id, symbol))"
+            )
+    except Exception:
+        pass
+
     try:
         with get_connection() as conn:
             conn.execute(
@@ -343,6 +355,20 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+-- Symbols the user trades personally in the same broker account.
+-- The system must never buy or sell these (broker pools shares per symbol
+-- and disposes FIFO, which would hit the user's own shares first).
+CREATE TABLE IF NOT EXISTS excluded_symbols (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   INTEGER NOT NULL,
+    symbol       TEXT NOT NULL,
+    external_qty INTEGER NOT NULL DEFAULT 0,
+    reason       TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE(session_id, symbol)
+);
 
 -- Every Claude API call's token usage and computed cost (INR).
 CREATE TABLE IF NOT EXISTS api_usage (

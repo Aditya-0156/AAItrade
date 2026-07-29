@@ -178,3 +178,115 @@ class TestCostTracking:
         assert s["trading_charges"] == 20.0
         # charges must NOT be subtracted again from realised pnl
         assert s["net_profit_after_all_expenses"] == pytest.approx(480.0, abs=0.01)
+
+
+class TestSymbolExclusion:
+    """The system must never TRADE a symbol the user owns — not just clamp size.
+    Zerodha pools shares per symbol and disposes FIFO, so any trade in a shared
+    symbol would move the user's oldest shares and their tax lots."""
+
+    def test_broker_snapshot_excludes_user_symbols(self, in_memory_db, session_with_watchlist):
+        from aaitrade.exclusions import refresh_from_broker, excluded_symbol_set
+        kite = _fake_kite([
+            {"tradingsymbol": "HDFCBANK", "quantity": 220, "t1_quantity": 34, "average_price": 743.89},
+        ])
+        result = refresh_from_broker(session_with_watchlist, kite, initial=True)
+        assert "HDFCBANK" in result["added"]
+        assert excluded_symbol_set(session_with_watchlist) == {"HDFCBANK"}
+
+    def test_buy_blocked_on_excluded_symbol(self, in_memory_db, balanced_config, session_with_watchlist):
+        from aaitrade.exclusions import add_exclusion
+        add_exclusion(session_with_watchlist, "HDFCBANK", "user owns", 254)
+        ex = Executor(balanced_config, session_with_watchlist)
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("HDFCBANK", 800)):
+            result = ex.execute({
+                "action": "BUY", "symbol": "HDFCBANK", "quantity": 5,
+                "reason": "test", "confidence": "high", "flags": [],
+            })
+        assert result["status"] == "rejected"
+        assert "OFF-LIMITS" in result["reason"]
+
+    def test_sell_blocked_on_excluded_symbol(self, in_memory_db, balanced_config, session_with_watchlist):
+        from aaitrade.exclusions import add_exclusion
+        add_exclusion(session_with_watchlist, "HDFCBANK", "user owns", 254)
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "HDFCBANK",
+            "quantity": 5, "avg_price": 800.0,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        ex = Executor(balanced_config, session_with_watchlist)
+        result = ex.execute({
+            "action": "SELL", "symbol": "HDFCBANK", "quantity": 5,
+            "reason": "test", "confidence": "high", "flags": [],
+        })
+        assert result["status"] == "rejected"
+
+    def test_system_owned_symbol_not_excluded(self, in_memory_db, session_with_watchlist):
+        """If the system bought it and the user owns none, it stays tradeable."""
+        from aaitrade.exclusions import refresh_from_broker, excluded_symbol_set
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "TCS",
+            "quantity": 10, "avg_price": 3000.0,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        kite = _fake_kite([{"tradingsymbol": "TCS", "quantity": 10, "t1_quantity": 0, "average_price": 3000.0}])
+        refresh_from_broker(session_with_watchlist, kite)
+        assert excluded_symbol_set(session_with_watchlist) == set()
+
+    def test_new_manual_buy_is_auto_excluded(self, in_memory_db, session_with_watchlist):
+        """User buys something new by hand → next pre-market excludes it."""
+        from aaitrade.exclusions import refresh_from_broker, excluded_symbol_set
+        refresh_from_broker(session_with_watchlist, _fake_kite([]), initial=True)
+        kite = _fake_kite([{"tradingsymbol": "INFY", "quantity": 50, "t1_quantity": 0, "average_price": 1500.0}])
+        result = refresh_from_broker(session_with_watchlist, kite)
+        assert "INFY" in result["added"]
+        assert "INFY" in excluded_symbol_set(session_with_watchlist)
+
+    def test_exclusion_released_when_user_sells(self, in_memory_db, session_with_watchlist):
+        from aaitrade.exclusions import refresh_from_broker, excluded_symbol_set
+        refresh_from_broker(session_with_watchlist, _fake_kite([
+            {"tradingsymbol": "INFY", "quantity": 50, "t1_quantity": 0, "average_price": 1500.0},
+        ]), initial=True)
+        result = refresh_from_broker(session_with_watchlist, _fake_kite([]))
+        assert "INFY" in result["released"]
+        assert excluded_symbol_set(session_with_watchlist) == set()
+
+    def test_watchlist_tool_rejects_excluded(self, in_memory_db, session_with_watchlist):
+        from aaitrade.exclusions import add_exclusion
+        from aaitrade.tools import watchlist_tools
+        add_exclusion(session_with_watchlist, "HDFCBANK", "user owns", 254)
+        watchlist_tools.set_session_id(session_with_watchlist)
+        result = watchlist_tools.add_to_watchlist("HDFCBANK", "looks good")
+        assert result["status"] == "rejected"
+
+
+class TestProfitReinvestSplit:
+    """50% of every realised profit compounds into working capital,
+    50% is secured and can never be traded away."""
+
+    def test_fifty_fifty_split(self, in_memory_db, balanced_config, session_with_watchlist):
+        db.update("sessions", session_with_watchlist,
+                  {"current_capital": 100000.0, "profit_reinvest_ratio": 0.5, "secured_profit": 0})
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "TCS",
+            "quantity": 10, "avg_price": 3000.0,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        ex = Executor(balanced_config, session_with_watchlist)  # charges disabled in fixture
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("TCS", 3100)):
+            result = ex.execute({
+                "action": "SELL", "symbol": "TCS", "quantity": 10,
+                "reason": "target hit", "confidence": "high", "flags": [],
+            })
+        assert result["status"] == "executed"
+        profit = 1000.0  # (3100-3000) * 10
+        s = db.query_one(
+            "SELECT current_capital, secured_profit FROM sessions WHERE id = ?",
+            (session_with_watchlist,),
+        )
+        # cost basis 30000 returned + half the profit reinvested
+        assert s["current_capital"] == pytest.approx(100000 + 30000 + profit * 0.5)
+        assert s["secured_profit"] == pytest.approx(profit * 0.5)
