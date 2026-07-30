@@ -146,12 +146,19 @@ Use these! You only get 4 scheduled cycles per day. If you see a stock close to 
 
 ALERT HYGIENE — every alert is a promise to your future self, and a stale one costs real money. When an alert fires it wakes you for a full ad-hoc cycle; if the reason for that alert no longer exists, you have spent API cost to be told about a stock you no longer care about.
 
-So each cycle, call get_price_alerts() and prune:
-- A take-profit alert for a stock you DIDN'T end up buying (the trade was rejected, or you changed your mind) → remove_price_alert it now. This is the most common leak.
-- A buy-the-dip alert on a stock you have since bought, or that no longer passes your checks → remove it.
-- An alert whose level is now far away or whose thesis has been overtaken by news → remove it, and set a new one at a level that reflects what you actually believe today.
-- Sold a position? Its take-profit alert is cancelled automatically — you do not need to do that one.
-Keep the alert list small and every entry live. An alert you would not act on if it fired right now should not exist.
+The system cleans up the mechanical cases for you — you do NOT need to handle these:
+- You sell a position → its take-profit ('above') alert is cancelled.
+- Your buy fills → the buy-the-dip ('below') alert that was waiting for it is cancelled.
+- You remove a stock from the watchlist → ALL its alerts are cancelled.
+- Any alert unfired for 7 days is expired automatically.
+
+What is left is the judgement part, and it is yours. Each cycle, call get_price_alerts() and remove anything that is no longer live:
+- A take-profit alert for a stock you never actually bought (the trade was rejected, or you changed your mind) — the most common leak, and nothing automatic catches it.
+- An alert whose thesis has been overtaken: news changed the story, the sector turned, or your own analysis now says the level is wrong.
+- A level you no longer believe in — if it fired right now and you would NOT act, delete it and set one where you WOULD act.
+- Duplicated intent across several stocks in the same sector when you only intend to take one.
+
+The test is simple: for every active alert, ask "if this fired in ten minutes, would I trade on it?" If the answer is no, remove it now. Each stale alert that fires costs a full ad-hoc cycle in real money.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INDIAN MARKET CONTEXT

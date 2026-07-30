@@ -262,8 +262,18 @@ def remove_from_watchlist(symbol: str, reason: str) -> dict:
         "remove_reason": reason,
     })
 
+    # Explicit loss of interest — its alerts are now noise. Firing one would
+    # drag Claude back into a stock it deliberately dropped.
+    cancelled = 0
+    try:
+        from aaitrade.tools.price_alerts import cancel_alerts_for
+        cancelled = cancel_alerts_for(_session_id, symbol, note="removed from watchlist")
+    except Exception as e:
+        logger.warning(f"Alert cleanup failed for {symbol}: {e}")
+
     return {
         "status": "removed",
         "symbol": symbol,
+        "alerts_cancelled": cancelled,
         "message": f"{symbol} removed from watchlist.",
     }

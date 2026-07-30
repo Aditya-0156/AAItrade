@@ -136,6 +136,15 @@ def expense_summary(session_id: int | None = None) -> dict:
     trading_charges = round(row["total"] if row else 0, 2)
     trade_count = row["n"] if row else 0
 
+    side_row = db.query_one(
+        f"SELECT COALESCE(SUM(CASE WHEN action='BUY' THEN charges ELSE 0 END), 0) AS buy_c, "
+        f"COALESCE(SUM(CASE WHEN action='SELL' THEN charges ELSE 0 END), 0) AS sell_c "
+        f"FROM trades {where_trades}",
+        params,
+    )
+    buy_charges = round(side_row["buy_c"] if side_row else 0, 2)
+    sell_charges = round(side_row["sell_c"] if side_row else 0, 2)
+
     # 2. Claude API cost
     api_row = db.query_one(
         f"SELECT COALESCE(SUM(cost_inr), 0) AS total, "
@@ -157,17 +166,37 @@ def expense_summary(session_id: int | None = None) -> dict:
     )
     other = round(other_row["total"] if other_row else 0, 2)
 
-    # 4. Realised P&L — already NET of trading charges (executor subtracts them)
-    pnl_row = db.query_one(
-        f"SELECT COALESCE(SUM(pnl), 0) AS total FROM trades "
-        f"WHERE action = 'SELL' AND pnl IS NOT NULL"
-        + (" AND session_id = ?" if session_id else ""),
+    # 4. Realised trading profit, computed from CAPITAL MOVEMENT rather than
+    #    the pnl column.
+    #
+    #    The trades.pnl figure only nets out the SELL-side charges. Buy-side
+    #    charges (STT, stamp, GST on entry) are debited from cash at purchase
+    #    and never appear in pnl — so summing pnl overstates the real profit
+    #    by exactly the buy-side charges.
+    #
+    #    (free cash + deployed at cost + secured) − starting capital is net of
+    #    every trading charge by construction, because both sides were taken
+    #    out of those balances. Open positions are counted at cost, so this is
+    #    realised profit only — unrealised gains are correctly excluded.
+    sess_rows = db.query(
+        "SELECT id, starting_capital, current_capital, secured_profit FROM sessions"
+        + (" WHERE id = ?" if session_id else ""),
         params,
     )
-    realised_pnl = round(pnl_row["total"] if pnl_row else 0, 2)
+    realised_pnl = 0.0
+    for srow in sess_rows:
+        dep = db.query_one(
+            "SELECT COALESCE(SUM(quantity * avg_price), 0) AS d FROM portfolio WHERE session_id = ?",
+            (srow["id"],),
+        )
+        deployed_at_cost = dep["d"] if dep else 0
+        total_value = srow["current_capital"] + deployed_at_cost + srow["secured_profit"]
+        realised_pnl += total_value - srow["starting_capital"]
+    realised_pnl = round(realised_pnl, 2)
 
     total_expenses = round(trading_charges + api_cost + subscriptions + other, 2)
-    # realised_pnl is net of trading charges already — don't subtract them twice
+    # realised_pnl is already net of ALL trading charges (both sides) — so the
+    # only costs left to deduct are the ones outside the broker account.
     net_profit = round(realised_pnl - api_cost - subscriptions - other, 2)
 
     # Today's API burn, for a running-rate view
@@ -179,6 +208,8 @@ def expense_summary(session_id: int | None = None) -> dict:
 
     return {
         "trading_charges": trading_charges,
+        "buy_charges": buy_charges,
+        "sell_charges": sell_charges,
         "trade_count": trade_count,
         "api_cost": api_cost,
         "api_calls": api_row["calls"] if api_row else 0,
@@ -201,8 +232,9 @@ def expense_breakdown_lines(session_id: int | None = None) -> list[str]:
     """Compact lines for the Telegram daily summary / briefing."""
     s = expense_summary(session_id)
     return [
-        f"Realised P&L (net of trading charges): ₹{s['realised_pnl_net_of_charges']:,.2f}",
-        f"Trading charges paid: ₹{s['trading_charges']:,.2f} over {s['trade_count']} trades",
+        f"Realised profit (net of ALL trading charges): ₹{s['realised_pnl_net_of_charges']:,.2f}",
+        f"Trading charges paid: ₹{s['trading_charges']:,.2f} over {s['trade_count']} trades "
+        f"(buy ₹{s['buy_charges']:,.2f} + sell ₹{s['sell_charges']:,.2f}) — already deducted above",
         f"Claude API: ₹{s['api_cost']:,.2f} ({s['api_calls']} calls, ₹{s['api_cost_today']:,.2f} today)",
         f"Subscriptions: ₹{s['subscriptions']:,.2f}",
         f"NET after everything: ₹{s['net_profit_after_all_expenses']:,.2f}",

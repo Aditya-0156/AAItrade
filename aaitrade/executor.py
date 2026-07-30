@@ -322,6 +322,15 @@ class Executor:
                 "opened_at": db.now_iso(),
             })
 
+        # The dip you were waiting for has arrived and you acted — that alert
+        # has served its purpose. Leaving it live re-wakes Claude about a stock
+        # it now owns.
+        try:
+            from aaitrade.tools.price_alerts import cancel_alerts_for
+            cancel_alerts_for(self.session_id, symbol, "below", "entry filled")
+        except Exception as e:
+            logger.warning(f"Entry-alert cleanup failed for {symbol}: {e}")
+
         trade_value = price * quantity
         logger.info(f"[PAPER] BUY {symbol} x{quantity} @ ₹{price:.2f} = ₹{trade_value:.2f} (+₹{charges:.2f} charges)")
 
@@ -721,17 +730,8 @@ class Executor:
         # which costs a full ad-hoc cycle in API spend for nothing.
         if remaining <= 0:
             try:
-                stale = db.query(
-                    "SELECT id FROM price_alerts WHERE session_id = ? AND symbol = ? "
-                    "AND direction = 'above' AND status = 'active'",
-                    (self.session_id, symbol),
-                )
-                for row in stale:
-                    db.update("price_alerts", row["id"], {"status": "cancelled"})
-                if stale:
-                    logger.info(
-                        f"Cancelled {len(stale)} take-profit alert(s) for {symbol} — position closed"
-                    )
+                from aaitrade.tools.price_alerts import cancel_alerts_for
+                cancel_alerts_for(self.session_id, symbol, "above", "position closed")
             except Exception as e:
                 logger.warning(f"Alert cleanup failed for {symbol}: {e}")
 

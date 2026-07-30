@@ -75,12 +75,13 @@ export function Expenses() {
       {/* Headline: net profit after EVERYTHING */}
       <div className="card">
         <div className="card-body">
-          <div className="text-xs text-gray-500 mb-1">Net Profit — after trading charges, API cost, and subscriptions</div>
+          <div className="text-xs text-gray-500 mb-1">Net Profit — after ALL costs: buy &amp; sell charges, Claude API, and subscriptions</div>
           <div className={`text-3xl font-bold tabular-nums ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {inr(net)}
           </div>
           <div className="text-xs text-gray-600 mt-1.5">
-            Realised P&amp;L {inr(s?.realised_pnl_net_of_charges ?? 0)} − API {inr(s?.api_cost ?? 0)} − subscriptions{' '}
+            Realised trading profit {inr(s?.realised_pnl_net_of_charges ?? 0)} (already net of{' '}
+            {inr(s?.trading_charges ?? 0)} buy + sell charges) − API {inr(s?.api_cost ?? 0)} − subscriptions{' '}
             {inr(s?.subscriptions ?? 0)}
             {s?.other ? ` − other ${inr(s.other)}` : ''}
           </div>
@@ -92,7 +93,7 @@ export function Expenses() {
         <StatTile
           label="Trading Charges"
           value={inr(s?.trading_charges ?? 0)}
-          sub={`${s?.trade_count ?? 0} trades (STT, stamp, DP, GST)`}
+          sub={`${s?.trade_count ?? 0} trades · buy ${inr(s?.buy_charges ?? 0)} + sell ${inr(s?.sell_charges ?? 0)}`}
           icon={Receipt}
           tone="bad"
         />
@@ -106,7 +107,7 @@ export function Expenses() {
         <StatTile
           label="Subscriptions"
           value={inr(s?.subscriptions ?? 0)}
-          sub="Zerodha Kite Connect ₹500/mo"
+          sub="Zerodha Kite Connect ₹500/mo — a full month, booked upfront"
           icon={Wallet}
           tone="bad"
         />

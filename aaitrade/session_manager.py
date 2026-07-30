@@ -837,6 +837,14 @@ class SessionManager:
             else:
                 logger.info(f"Pre-market token check OK: {msg}")
 
+        # 1b. Retire alerts that have sat unfired for a week — a forgotten
+        #     alert that finally triggers pulls Claude into a stale thesis.
+        try:
+            from aaitrade.tools.price_alerts import expire_stale_alerts
+            expire_stale_alerts(self.session_id)
+        except Exception as e:
+            logger.warning(f"Alert expiry failed: {e}")
+
         # 2. Macro news
         try:
             get_macro_news()

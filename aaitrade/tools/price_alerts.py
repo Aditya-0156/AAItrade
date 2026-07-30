@@ -21,6 +21,51 @@ _session_id: int | None = None
 _cycle_number: int | None = None
 
 
+def cancel_alerts_for(session_id: int, symbol: str, direction: str | None = None,
+                      note: str = "") -> int:
+    """Cancel active alerts for a symbol. direction=None cancels both sides.
+
+    Used whenever an alert's reason has objectively expired: the position was
+    closed, the dip was bought, or the stock left the watchlist. A stale alert
+    is not harmless — firing it wakes Claude for a full ad-hoc cycle.
+    """
+    sql = ("SELECT id FROM price_alerts WHERE session_id = ? AND symbol = ? "
+           "AND status = 'active'")
+    params: tuple = (session_id, symbol)
+    if direction:
+        sql += " AND direction = ?"
+        params += (direction,)
+    rows = db.query(sql, params)
+    for row in rows:
+        db.update("price_alerts", row["id"], {"status": "cancelled"})
+    if rows:
+        logger.info(f"Cancelled {len(rows)} alert(s) for {symbol}{': ' + note if note else ''}")
+    return len(rows)
+
+
+def expire_stale_alerts(session_id: int, max_age_days: int = 7) -> int:
+    """Retire alerts that have sat unfired for too long.
+
+    An alert set a week ago reflects a view formed a week ago. If the price
+    never came, the thesis has usually moved on — and a forgotten alert that
+    finally fires drags Claude into a stock it stopped caring about.
+    """
+    cutoff = (datetime.now(_IST) - timedelta(days=max_age_days)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = db.query(
+        "SELECT id, symbol FROM price_alerts WHERE session_id = ? AND status = 'active' "
+        "AND created_at < ?",
+        (session_id, cutoff),
+    )
+    for row in rows:
+        db.update("price_alerts", row["id"], {"status": "expired"})
+    if rows:
+        logger.info(
+            f"Expired {len(rows)} alert(s) unfired for {max_age_days}+ days: "
+            + ", ".join(r["symbol"] for r in rows)
+        )
+    return len(rows)
+
+
 def set_alert_context(session_id: int, cycle_number: int):
     """Inject session context — called before each decision cycle."""
     global _session_id, _cycle_number
