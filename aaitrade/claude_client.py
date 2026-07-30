@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 # Prevents rate limits and freezes when multiple sessions run concurrently.
 _claude_lock = threading.Lock()
 
+# Newer models REMOVED the sampling parameters — sending `temperature`,
+# `top_p`, or `top_k` returns a 400 "deprecated for this model". Haiku 4.5
+# and older still accept them. Steer those models with prompting instead.
+_NO_SAMPLING_PARAMS = ("sonnet-5", "opus-5", "opus-4-7", "opus-4-8", "fable-5", "mythos")
+
+
+def supports_temperature(model: str) -> bool:
+    """True if this model still accepts the temperature parameter."""
+    m = (model or "").lower()
+    return not any(tag in m for tag in _NO_SAMPLING_PARAMS)
+
+
+def sampling_kwargs(model: str, temperature: float) -> dict:
+    """Sampling kwargs safe to splat into messages.create for this model."""
+    return {"temperature": temperature} if supports_temperature(model) else {}
+
 
 class ClaudeClient:
     """Manages communication with Claude for trading decisions."""
@@ -69,7 +85,7 @@ class ClaudeClient:
                         response = self.client.messages.create(
                             model=model,
                             max_tokens=8192,
-                            temperature=0.3,
+                            **sampling_kwargs(model, 0.3),
                             system=[
                                 {
                                     "type": "text",

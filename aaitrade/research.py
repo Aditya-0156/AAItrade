@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from aaitrade import db
 from aaitrade.holidays import next_trading_day
+from aaitrade.claude_client import sampling_kwargs
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -134,10 +135,11 @@ def run_offday_research(claude_client, session_id: int, model: str | None = None
     )
 
     try:
+        target_model = model or claude_client.model
         response = claude_client.client.messages.create(
-            model=model or claude_client.model,
+            model=target_model,
             max_tokens=2048,
-            temperature=0.3,
+            **sampling_kwargs(target_model, 0.3),
             system=_OUTLOOK_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -252,10 +254,11 @@ def _expand_connection_graph(claude_client, intel: dict, model: str | None = Non
         themes=", ".join(POLICY_THEMES.keys()), material=material,
     )
 
+    target_model = model or claude_client.model
     response = claude_client.client.messages.create(
-        model=model or claude_client.model,
+        model=target_model,
         max_tokens=1500,
-        temperature=0.1,
+        **sampling_kwargs(target_model, 0.1),
         system=_EXTRACTION_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
