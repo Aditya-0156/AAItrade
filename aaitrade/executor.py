@@ -135,14 +135,40 @@ class Executor:
 
         # ── Validation Checklist ──
 
-        # 1. Is symbol on watchlist?
+        # 1. Is symbol on watchlist? If not, auto-add when the system's own
+        #    scanner already vetted it (liquidity, price range, band fit) —
+        #    rejecting a scanner pick just burns a tool round on a retry.
         on_watchlist = db.query_one(
             "SELECT id FROM watchlist "
             "WHERE session_id = ? AND symbol = ? AND removed_at IS NULL",
             (self.session_id, symbol),
         )
         if not on_watchlist:
-            return {"status": "rejected", "reason": f"{symbol} is not on the watchlist"}
+            vetted = db.query_one(
+                "SELECT symbol FROM scan_results WHERE symbol = ? "
+                "AND scan_date = (SELECT MAX(scan_date) FROM scan_results)",
+                (symbol,),
+            )
+            if vetted:
+                db.insert("watchlist", {
+                    "session_id": self.session_id,
+                    "symbol": symbol,
+                    "company": "",
+                    "sector": "",
+                    "notes": "",
+                    "added_at": db.now_iso(),
+                    "add_reason": "Auto-added: passed today's full-market scan",
+                })
+                logger.info(f"Auto-added scanner-vetted {symbol} to watchlist for this trade")
+            else:
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"{symbol} is not on the watchlist and was not in today's scan. "
+                        f"Call add_to_watchlist('{symbol}', reason) first — you may do "
+                        f"this at any time, then retry the trade."
+                    ),
+                }
 
         # 2. Get current session state
         session = db.query_one(

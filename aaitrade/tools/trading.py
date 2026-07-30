@@ -27,6 +27,67 @@ _cycle_number: int | None = None
 _alert_mode: bool = False  # True during ad-hoc alert-triggered cycles — bypasses the 9:30 slot trade block
 
 
+_TEMPLATE_PHRASES = (
+    "touches in 30d", "band position", "scanner rank", "direction changes",
+    "demonstrated floor", "demonstrated resistance", "after charges",
+)
+
+
+def _research_gate(symbol: str, why_now: str) -> dict | None:
+    """Block a BUY that hasn't been researched. Returns a rejection or None.
+
+    Gate 1 — news was actually fetched for THIS symbol in THIS cycle.
+    Gate 2 — why_now exists, is substantive, and isn't just the numbers again.
+    """
+    # Gate 1: did the agent look at the company's news this cycle?
+    try:
+        checked = db.query_one(
+            "SELECT 1 FROM tool_calls WHERE session_id = ? AND cycle_number = ? "
+            "AND tool_name IN ('get_stock_news', 'search_web', 'get_sector_news', 'get_fundamentals') "
+            "AND parameters LIKE ?",
+            (_session_id, _cycle_number, f'%"{symbol}"%'),
+        )
+        if not checked:
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"BLOCKED: you have not researched {symbol} this cycle. Numbers alone "
+                    f"are not a trade. Call get_stock_news('{symbol}') — and search_web or "
+                    f"get_fundamentals if the news is unclear — to find out WHY it is at "
+                    f"this price. A stock can look perfect on the chart and be falling for "
+                    f"a reason the chart cannot show. Then retry."
+                ),
+            }
+    except Exception as e:
+        logger.warning(f"Research gate check failed for {symbol}: {e}")
+
+    # Gate 2: is there a real qualitative story?
+    text = (why_now or "").strip()
+    if len(text) < 40:
+        return {
+            "status": "rejected",
+            "reason": (
+                f"BLOCKED: why_now is missing or too thin for {symbol}. In your own words: "
+                f"why is this stock cheap TODAY, and why is that temporary? Name the cause "
+                f"(sector selloff / market-wide dip / earnings reaction / policy headline / "
+                f"no news) and why it reverses. This is the judgment the numbers cannot make."
+            ),
+        }
+    stripped = text.lower()
+    hits = sum(1 for p in _TEMPLATE_PHRASES if p in stripped)
+    if hits >= 2:
+        return {
+            "status": "rejected",
+            "reason": (
+                f"BLOCKED: why_now for {symbol} just restates the metrics ({hits} numeric "
+                f"phrases). The touch counts and band position are already recorded — they "
+                f"are not a reason. Explain the SITUATION: what happened to this company or "
+                f"its sector that put the price here, and why the market will re-rate it."
+            ),
+        }
+    return None
+
+
 def set_trading_context(executor, session_id: int, cycle_number: int, alert_mode: bool = False):
     """Inject executor + cycle context before each decision cycle.
 
@@ -79,6 +140,18 @@ def set_trading_context(executor, session_id: int, cycle_number: int, alert_mode
                 "type": "string",
                 "description": "Why you are making this trade (2-4 sentences).",
             },
+            "why_now": {
+                "type": "string",
+                "description": (
+                    "REQUIRED for BUY. The NON-NUMERIC story, in your own words: WHY is "
+                    "this stock available at this price today, and why will that reverse? "
+                    "Name the actual cause (sector selloff, broad market dip, an earnings "
+                    "reaction, a policy headline, no news at all) and say why it is "
+                    "temporary rather than structural. Do NOT restate touch counts, band "
+                    "position, or scanner score — those are already recorded. If you "
+                    "cannot explain why the price is where it is, you are not ready to buy."
+                ),
+            },
             "thesis": {
                 "type": "string",
                 "description": "For BUY: what must happen for this trade to work. Omit for SELL.",
@@ -95,9 +168,19 @@ def execute_trade(
     stop_loss_price: float | None = None,
     take_profit_price: float | None = None,
     thesis: str = "",
+    why_now: str = "",
 ) -> dict:
     if not _executor:
         return {"status": "error", "reason": "Executor not initialized — cannot execute trade"}
+
+    # ── RESEARCH GATES (BUY only) ──────────────────────────────────────────
+    # Numbers alone are not a trading decision. Before committing capital you
+    # must have looked at what is happening to the company, and be able to say
+    # why the price is where it is. Both are enforced, not merely requested.
+    if action.upper() == "BUY":
+        gate = _research_gate(symbol, why_now)
+        if gate:
+            return gate
 
     # Hard block: no trades during the 9:30 AM slot (before 11:00 AM IST)
     # Based on clock time, not cycle_count — so server restarts don't re-trigger this block.
@@ -133,8 +216,8 @@ def execute_trade(
         "quantity": quantity,
         "stop_loss_price": stop_loss_price,
         "take_profit_price": take_profit_price,
-        "reason": reason,
-        "thesis": thesis,
+        "reason": (f"{reason} | WHY NOW: {why_now}" if why_now else reason),
+        "thesis": thesis or why_now,
         "confidence": "high",
         "flags": [],
     }
