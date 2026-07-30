@@ -79,6 +79,14 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Add trend columns to scan_results (for existing DBs)
+    for _col, _type in (("trend_verdict", "TEXT"), ("ret_3m", "REAL"), ("pos_60d", "REAL")):
+        try:
+            with get_connection() as conn:
+                conn.execute(f"ALTER TABLE scan_results ADD COLUMN {_col} {_type}")
+        except Exception:
+            pass
+
     # Ensure exclusion + expense tables exist (for existing DBs)
     try:
         with get_connection() as conn:
@@ -152,7 +160,7 @@ def init_db():
                 "symbol TEXT NOT NULL, rank INTEGER, score REAL, close REAL, "
                 "entry_level REAL, entry_touches INTEGER, target_level REAL, "
                 "target_touches INTEGER, gap_pct REAL, band_pos REAL, shape TEXT, "
-                "turnover_cr REAL, created_at TEXT NOT NULL, UNIQUE(scan_date, symbol))"
+                "turnover_cr REAL, trend_verdict TEXT, ret_3m REAL, pos_60d REAL, created_at TEXT NOT NULL, UNIQUE(scan_date, symbol))"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_scan_results_date ON scan_results(scan_date, rank)"
@@ -452,6 +460,9 @@ CREATE TABLE IF NOT EXISTS scan_results (
     band_pos        REAL,
     shape           TEXT,
     turnover_cr     REAL,
+    trend_verdict   TEXT,
+    ret_3m          REAL,
+    pos_60d         REAL,
     created_at      TEXT NOT NULL,
     UNIQUE(scan_date, symbol)
 );

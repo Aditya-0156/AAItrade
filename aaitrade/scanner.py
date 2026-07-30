@@ -97,7 +97,9 @@ def score_symbol(symbol: str, candles: list[dict]) -> dict | None:
     if len(candles) < 40:
         return None
 
-    from aaitrade.tools.levels import _find_levels, _oscillation
+    from aaitrade.tools.levels import (
+        _find_levels, _oscillation, trend_context, estimate_time_to_target,
+    )
 
     last30 = candles[-30:]
     last14 = candles[-14:]
@@ -122,10 +124,16 @@ def score_symbol(symbol: str, candles: list[dict]) -> dict | None:
     if band_pos > _MAX_BAND_POS:
         return None  # not near a local low — not our setup
 
-    # Shape: reject falling knives outright
+    # Shape: reject falling knives outright (14-day view)
     shape = _oscillation(last14)
     if shape["shape"] == "FALLING_KNIFE":
         return None
+
+    # Longer-horizon context. NOT a veto — a small target stays reachable in
+    # a stock that is lower than it was months ago. It adjusts the score
+    # (risk and expected holding time), and the full picture is handed to the
+    # agent so it can judge the situation rather than obey a percentage.
+    trend = trend_context(candles)
 
     # Levels
     supports, resistances = _find_levels(last30, close)
@@ -150,8 +158,11 @@ def score_symbol(symbol: str, candles: list[dict]) -> dict | None:
     score += max(0.0, (45 - band_pos)) / 45 * 30
     # Floor strength: touches capped at 8 (up to 25)
     score += min(floor["touches"], 8) / 8 * 25
-    # Target quality: sweet spot 0.8-2.5% gap with real touches (up to 20)
-    gap_component = 20.0 if gap_pct <= 2.5 else max(5.0, 20 - (gap_pct - 2.5) * 5)
+    # Target quality: judged by how well-established the level is, not by an
+    # arbitrary size cap. A 4% target with 6 touches is a fine trade — it
+    # simply takes longer, which time_to_target quantifies. Only very distant
+    # targets taper, and gently.
+    gap_component = 20.0 if gap_pct <= 4.0 else max(10.0, 20 - (gap_pct - 4.0) * 2)
     score += gap_component * min(ceiling["touches"], 6) / 6
     # Oscillation (up to 15)
     score += 15 if shape["shape"] == "OSCILLATING" else 5
@@ -161,9 +172,36 @@ def score_symbol(symbol: str, candles: list[dict]) -> dict | None:
     if close < close_5d_ago and (today_low - floor["level"]) / close * 100 < 1.5:
         score += 10
 
+    # Longer-horizon adjustment — a tilt, never a gate. Without ANY tilt,
+    # "deeper in the band = better" ranks a collapsing stock highest; with a
+    # veto, perfectly tradeable stocks get thrown away. So: tilt.
+    _tilt = {
+        "UPTREND_PULLBACK": 12,        # strong on both horizons
+        "STABLE_RANGE": 8,             # genuine range behaviour
+        "SHARP_DIP_IN_RANGE": 6,       # sharp drop, trend intact
+        "DOWNTREND_STABILISING": -6,   # steadying after a fall — still tradeable
+        "ACCELERATING_DECLINE": -18,   # falling on both horizons — needs a real reason
+    }
+    score += _tilt.get(trend["verdict"], 0)
+
+    # How long has this trade historically taken, and did it work? Empirical,
+    # from this stock's own history — the honest answer to "is my target
+    # reachable", which no percentage rule can give.
+    timing = estimate_time_to_target(candles, floor["level"], ceiling["level"])
+    if timing.get("hit_rate") is not None:
+        # Reward setups this stock has actually completed before
+        score += (timing["hit_rate"] - 50) / 50 * 10
+
+    score = max(0.0, min(100.0, score))
+
     return {
         "symbol": symbol,
         "score": round(score, 1),
+        "trend_verdict": trend["verdict"],
+        "ret_3m": trend["ret_3m"],
+        "pos_60d": trend["pos_60d"],
+        "hit_rate": timing.get("hit_rate"),
+        "median_days": timing.get("median_days"),
         "close": round(close, 2),
         "entry_level": floor["level"],
         "entry_touches": floor["touches"],
@@ -183,7 +221,7 @@ def _fetch_candles(symbol: str) -> list[dict] | None:
     """~120 daily candles for one symbol via the active market data source."""
     try:
         from aaitrade.tools.market import get_price_history
-        history = get_price_history(symbol, days=120)
+        history = get_price_history(symbol, days=220)  # need ~6 months for trend regime
         if "error" in history:
             return None
         return history["candles"]
@@ -291,12 +329,13 @@ def latest_scan_block(limit: int = 15, session_id: int | None = None) -> str:
         return "No scan available yet."
     lines = [
         f"(computed {latest['d']} post-close — verify with analyze_levels + news before acting)",
-        "RANK|SYMBOL|SCORE|CLOSE|ENTRY(touches)|TARGET(touches)|GAP%|BAND_POS|SHAPE",
+        "RANK|SYMBOL|SCORE|CLOSE|ENTRY(touches)|TARGET(touches)|GAP%|BAND_POS|SHAPE|REGIME|3M%",
     ]
     for r in rows:
         lines.append(
             f"{r['rank']}|{r['symbol']}|{r['score']}|{r['close']}|"
             f"{r['entry_level']}({r['entry_touches']})|{r['target_level']}({r['target_touches']})|"
-            f"{r['gap_pct']}|{r['band_pos']}|{r['shape']}"
+            f"{r['gap_pct']}|{r['band_pos']}|{r['shape']}|"
+            f"{r['trend_verdict'] or '-'}|{r['ret_3m'] if r['ret_3m'] is not None else '-'}"
         )
     return "\n".join(lines)

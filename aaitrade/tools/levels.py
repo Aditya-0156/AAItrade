@@ -73,6 +73,138 @@ def _find_levels(candles: list[dict], current: float) -> tuple[list, list]:
     return supports[:3], resistances[:3]
 
 
+def estimate_time_to_target(candles: list[dict], entry: float, target: float,
+                            lookback: int = 120, max_wait: int = 20) -> dict:
+    """Empirically: when this stock has been at the entry level before, how
+    often did it reach the target, and how many days did it take?
+
+    Answers the two questions a static level check cannot: will it get there,
+    and how long will my capital be tied up? Measured from the stock's own
+    history, not from theory.
+    """
+    seg = candles[-lookback:] if len(candles) >= lookback else candles
+    if len(seg) < 30 or entry <= 0 or target <= entry:
+        return {"samples": 0, "hit_rate": None, "median_days": None,
+                "note": "Not enough history to estimate."}
+
+    entry_zone = entry * 1.005  # "at or below entry"
+    days_taken, misses = [], 0
+    i = 0
+    while i < len(seg) - 1:
+        if seg[i]["low"] <= entry_zone:
+            hit = None
+            for j in range(i + 1, min(i + 1 + max_wait, len(seg))):
+                if seg[j]["high"] >= target:
+                    hit = j - i
+                    break
+            if hit is not None:
+                days_taken.append(hit)
+                i += hit  # move past this episode so we don't double-count
+            else:
+                misses += 1
+                i += max_wait  # this episode failed; skip its window
+        i += 1
+
+    samples = len(days_taken) + misses
+    if samples == 0:
+        return {"samples": 0, "hit_rate": None, "median_days": None,
+                "note": "Price has not visited this entry level recently."}
+
+    hit_rate = round(len(days_taken) / samples * 100)
+    median_days = None
+    if days_taken:
+        s = sorted(days_taken)
+        median_days = s[len(s) // 2]
+
+    if not days_taken:
+        note = (f"In {samples} past visits to this level, the target was NEVER reached "
+                f"within {max_wait} days. The target may be too far.")
+    else:
+        note = (f"Historically: from this level the target was reached {hit_rate}% of the "
+                f"time ({len(days_taken)}/{samples}), typically in ~{median_days} trading days.")
+    return {"samples": samples, "hit_rate": hit_rate,
+            "median_days": median_days, "max_wait": max_wait, "note": note}
+
+
+def trend_context(candles: list[dict]) -> dict:
+    """Multi-horizon read, weighted toward the recent.
+
+    Recent behaviour (1 week, 1 month) decides whether the setup is live —
+    it is what actually drives a 0.5-1.5% bounce. The 3- and 6-month picture
+    does NOT veto the trade (a small target is reachable even in a stock
+    that is lower than it was months ago); it sets RISK and EXPECTED TIME:
+    a stock still trending down can hit the target but is likelier to need
+    a stop, and to take longer getting there.
+    """
+    closes = [c["close"] for c in candles]
+    now = closes[-1]
+
+    def ret(n: int) -> float | None:
+        return round((now - closes[-n]) / closes[-n] * 100, 1) if len(closes) >= n else None
+
+    ret_1w, ret_1m, ret_3m, ret_6m = ret(5), ret(22), ret(66), ret(132)
+
+    def band_pos(window: int) -> float | None:
+        if len(candles) < window:
+            return None
+        seg = candles[-window:]
+        hi = max(c["high"] for c in seg)
+        lo = min(c["low"] for c in seg)
+        return round((now - lo) / (hi - lo) * 100, 1) if hi > lo else 50.0
+
+    pos_20, pos_60, pos_120 = band_pos(20), band_pos(60), band_pos(120)
+
+    # ── Recent regime (primary — drives the bounce) ──
+    if ret_1m is not None and ret_1m <= -8:
+        recent = "SHARP_RECENT_FALL"
+    elif ret_1m is not None and ret_1m >= 6:
+        recent = "RECENT_STRENGTH"
+    else:
+        recent = "RECENT_STABLE"
+
+    # ── Long-horizon regime (secondary — risk + expected time) ──
+    if ret_3m is None:
+        longer, risk = "UNKNOWN", "normal"
+    elif ret_3m >= 8:
+        longer, risk = "UPTREND", "low"
+    elif ret_3m <= -20:
+        longer, risk = "STEEP_DOWNTREND", "high"
+    elif ret_3m <= -8:
+        longer, risk = "DOWNTREND", "elevated"
+    else:
+        longer, risk = "SIDEWAYS", "normal"
+
+    # Combined verdict — recent leads, long-horizon qualifies
+    if recent == "RECENT_STRENGTH" and longer == "UPTREND":
+        verdict = "UPTREND_PULLBACK"
+        note = "Strong on both horizons — a pullback inside an uptrend. Best-quality setup."
+    elif longer in ("DOWNTREND", "STEEP_DOWNTREND") and recent == "SHARP_RECENT_FALL":
+        verdict = "ACCELERATING_DECLINE"
+        note = ("Falling on BOTH horizons — down over months AND dropping hard this month. "
+                "The bounce is least reliable here and the next leg down is the real risk. "
+                "Take it only with a specific reason the fall is ending, and size small.")
+    elif longer in ("DOWNTREND", "STEEP_DOWNTREND"):
+        verdict = "DOWNTREND_STABILISING"
+        note = (f"Down {abs(ret_3m):.0f}% over 3 months but steady recently "
+                f"(1m {ret_1m}%, 1w {ret_1w}%). A small target is still very reachable — "
+                f"the long decline mainly means wider stops and less margin for error. "
+                f"Tradeable with discipline; do not size up.")
+    elif recent == "SHARP_RECENT_FALL":
+        verdict = "SHARP_DIP_IN_RANGE"
+        note = ("Longer-term trend is intact; this is a sharp recent drop inside it. "
+                "Classic mean-reversion candidate IF the cause is not company-specific.")
+    else:
+        verdict = "STABLE_RANGE"
+        note = "Steady on both horizons — genuine range behaviour, dips mean-revert."
+
+    return {
+        "ret_1w": ret_1w, "ret_1m": ret_1m, "ret_3m": ret_3m, "ret_6m": ret_6m,
+        "pos_20d": pos_20, "pos_60d": pos_60, "pos_120d": pos_120,
+        "recent_regime": recent, "long_regime": longer, "risk_level": risk,
+        "verdict": verdict, "note": note,
+    }
+
+
 def _oscillation(candles: list[dict]) -> dict:
     """Shape of the recent chart: bouncing band or straight-line fall?"""
     closes = [c["close"] for c in candles]
@@ -171,6 +303,7 @@ def analyze_levels(
 
         supports, resistances = _find_levels(last30, current)
         shape = _oscillation(last14)
+        trend = trend_context(candles)
 
         result: dict = {
             "symbol": symbol,
@@ -182,6 +315,7 @@ def analyze_levels(
                 "in_bottom_third": band_pos <= 33.4,
             },
             "range_90d": {"low": round(lo90, 2), "high": round(hi90, 2)},
+            "trend_context": trend,  # ← is the 14d band a range, or a step down?
             "supports_30d": supports,        # 3+ touch bands below current
             "resistances_30d": resistances,  # 3+ touch bands above current
             "shape_14d": shape,
@@ -215,6 +349,16 @@ def analyze_levels(
         checks.append(f"SHAPE: {shape['shape']} ({shape['direction_changes']} direction changes) "
                       f"→ {'FAIL — no floor yet, skip' if shape['shape'] == 'FALLING_KNIFE' else 'PASS'}")
 
+        # Multi-horizon CONTEXT — deliberately not a pass/fail. Recent
+        # behaviour drives the bounce; the longer view sets risk and timing.
+        # Judge the situation; do not obey the percentage.
+        checks.append(
+            f"CONTEXT [{trend['verdict']}, risk {trend['risk_level']}]: "
+            f"1w {trend['ret_1w']}%, 1m {trend['ret_1m']}%, 3m {trend['ret_3m']}%, "
+            f"6m {trend['ret_6m']}% | position in range: 20d {trend['pos_20d']}%, "
+            f"60d {trend['pos_60d']}%. {trend['note']}"
+        )
+
         # Net-profit check after real costs
         if entry_price and target_price and entry_price > 0:
             from aaitrade.executor import transaction_costs
@@ -236,6 +380,12 @@ def analyze_levels(
                 f"NET PROFIT: ₹{net:.0f} ({net / invested * 100:.2f}%) after ₹{buy_cost + sell_cost:.0f} charges "
                 f"→ {'PASS' if net > invested * 0.003 else 'FAIL — costs eat this trade, raise target or size'}"
             )
+
+        # How long has this exact move taken before, and did it complete?
+        if entry_price and target_price:
+            timing = estimate_time_to_target(candles, entry_price, target_price)
+            result["time_to_target"] = timing
+            checks.append(f"TIMING: {timing['note']}")
 
         result["checklist"] = checks
         return result
