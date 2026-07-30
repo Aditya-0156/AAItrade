@@ -27,6 +27,162 @@ _cycle_number: int | None = None
 _alert_mode: bool = False  # True during ad-hoc alert-triggered cycles — bypasses the 9:30 slot trade block
 
 
+GOAL_MARGIN_LOW = 1.0    # % — the usual profit band per trade
+GOAL_MARGIN_HIGH = 2.0   # % — beyond this is allowed, but must be earned
+STRONG_EVIDENCE_CHARS = 80  # evidence bar for pushing past the usual band
+
+
+@register_tool(
+    name="update_position_targets",
+    description=(
+        "Move the stop-loss and/or take-profit on a position you already hold. "
+        "This is how you let a winner run WITHOUT giving the gain back: raise "
+        "the target only while also raising the stop behind it.\n\n"
+        "Rules enforced by the system:\n"
+        "- The stop can only move UP, never down. Widening a stop to avoid "
+        "being stopped out is how small losses become large ones.\n"
+        "- Extending the target REQUIRES raising the stop to at least breakeven "
+        "in the same call. An unprotected runner is not a plan.\n"
+        f"- The usual profit band is {GOAL_MARGIN_LOW:.0f}-{GOAL_MARGIN_HIGH:.0f}% per trade. "
+        f"You MAY go beyond it, but the evidence bar rises with the ambition — a bigger "
+        f"target is a bigger claim and needs specific proof the move continues.\n"
+        "- `evidence` must be specific and factual (volume surge, sector "
+        "breakout, catalyst, next level clearly open). Restating metrics is "
+        "rejected. If you have no evidence, sell at your target instead."
+    ),
+    parameters={
+        "properties": {
+            "symbol": {"type": "string", "description": "NSE symbol of a position you hold"},
+            "take_profit_price": {
+                "type": "number",
+                "description": "New take-profit level. Raise to let a winner run; lower to bank sooner.",
+            },
+            "stop_loss_price": {
+                "type": "number",
+                "description": "New stop level. May only move UP. Required when extending the target.",
+            },
+            "evidence": {
+                "type": "string",
+                "description": (
+                    "Specific, factual reason for the change — what you observed that "
+                    "says this move continues. Not metrics you already reported."
+                ),
+            },
+        },
+        "required": ["symbol", "evidence"],
+    },
+)
+def update_position_targets(symbol: str, evidence: str,
+                            take_profit_price: float | None = None,
+                            stop_loss_price: float | None = None) -> dict:
+    symbol = symbol.upper().strip()
+    if take_profit_price is None and stop_loss_price is None:
+        return {"status": "rejected", "reason": "Provide take_profit_price and/or stop_loss_price."}
+
+    pos = db.query_one(
+        "SELECT id, quantity, avg_price, stop_loss_price, take_profit_price "
+        "FROM portfolio WHERE session_id = ? AND symbol = ?",
+        (_session_id, symbol),
+    )
+    if not pos:
+        return {"status": "rejected", "reason": f"You have no position in {symbol}."}
+
+    entry = pos["avg_price"]
+    old_stop, old_target = pos["stop_loss_price"], pos["take_profit_price"]
+
+    # Evidence quality — same bar as why_now on a buy
+    text = (evidence or "").strip()
+    if len(text) < 30:
+        return {
+            "status": "rejected",
+            "reason": (
+                "Evidence is too thin. Name what you actually observed that says this "
+                "move continues — volume, a catalyst, the next level being open. "
+                "Without it, sell at your existing target."
+            ),
+        }
+    if sum(1 for p in _TEMPLATE_PHRASES if p in text.lower()) >= 2:
+        return {
+            "status": "rejected",
+            "reason": (
+                "Evidence just restates the metrics. Those describe where the price has "
+                "been, not why it keeps going. Give a real observation or take the profit."
+            ),
+        }
+
+    updates: dict = {}
+
+    # ── Stop: may only ratchet up ──
+    if stop_loss_price is not None:
+        if old_stop is not None and stop_loss_price < old_stop:
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"Stop can only move UP. Yours is ₹{old_stop}; you asked for "
+                    f"₹{stop_loss_price}. Widening a stop to avoid being stopped out is "
+                    f"how a small loss becomes a large one. If the thesis is dead, SELL."
+                ),
+            }
+        updates["stop_loss_price"] = round(stop_loss_price, 2)
+
+    # ── Target ──
+    if take_profit_price is not None:
+        target_pct = (take_profit_price - entry) / entry * 100
+        extending = old_target is not None and take_profit_price > old_target
+
+        # Above the usual 1-2% band is permitted — but the evidence bar rises
+        # with the ambition. A bigger target is a bigger claim.
+        if target_pct > GOAL_MARGIN_HIGH and len(text) < STRONG_EVIDENCE_CHARS:
+            return {
+                "status": "rejected",
+                "reason": (
+                    f"₹{take_profit_price} is {target_pct:.1f}% above your entry ₹{entry:.2f}, "
+                    f"beyond the usual {GOAL_MARGIN_LOW:.0f}-{GOAL_MARGIN_HIGH:.0f}% band. That "
+                    f"is allowed, but it needs real evidence — what specifically says this runs "
+                    f"further? Volume expansion, a breakout above a long-held level, a fresh "
+                    f"catalyst, sector-wide strength. Give the detail, or take the profit at "
+                    f"your current target."
+                ),
+            }
+
+        if extending:
+            # Letting it run is only allowed WITH protection
+            effective_stop = updates.get("stop_loss_price", old_stop)
+            if effective_stop is None or effective_stop < entry:
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"To extend the target you must also raise the stop to at least "
+                        f"breakeven (₹{entry:.2f}) in the same call. Currently "
+                        f"₹{effective_stop if effective_stop else 'none'}. A runner without "
+                        f"protection is how a win round-trips to a loss."
+                    ),
+                }
+        updates["take_profit_price"] = round(take_profit_price, 2)
+
+    db.update("portfolio", pos["id"], updates)
+
+    note = ""
+    if "take_profit_price" in updates:
+        pct = (updates["take_profit_price"] - entry) / entry * 100
+        if pct > GOAL_MARGIN_HIGH:
+            note = (f" NOTE: {pct:.1f}% is above the usual {GOAL_MARGIN_LOW:.0f}-"
+                    f"{GOAL_MARGIN_HIGH:.0f}% band — you have justified it, now manage it. "
+                    f"Ratchet the stop up as it advances and take the profit the moment "
+                    f"the momentum you cited fades.")
+
+    logger.info(f"{symbol} targets updated: {updates} | evidence: {text[:120]}")
+    return {
+        "status": "updated",
+        "symbol": symbol,
+        "entry_price": entry,
+        "stop_loss_price": updates.get("stop_loss_price", old_stop),
+        "take_profit_price": updates.get("take_profit_price", old_target),
+        "previous": {"stop_loss_price": old_stop, "take_profit_price": old_target},
+        "message": f"Targets updated for {symbol}.{note}",
+    }
+
+
 _TEMPLATE_PHRASES = (
     "touches in 30d", "band position", "scanner rank", "direction changes",
     "demonstrated floor", "demonstrated resistance", "after charges",
