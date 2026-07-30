@@ -716,6 +716,25 @@ class Executor:
                 "pnl": round(pnl, 2),
             })
 
+        # Position closed → its take-profit alert is meaningless. Leaving it
+        # active makes the monitor wake Claude for a stock it no longer owns,
+        # which costs a full ad-hoc cycle in API spend for nothing.
+        if remaining <= 0:
+            try:
+                stale = db.query(
+                    "SELECT id FROM price_alerts WHERE session_id = ? AND symbol = ? "
+                    "AND direction = 'above' AND status = 'active'",
+                    (self.session_id, symbol),
+                )
+                for row in stale:
+                    db.update("price_alerts", row["id"], {"status": "cancelled"})
+                if stale:
+                    logger.info(
+                        f"Cancelled {len(stale)} take-profit alert(s) for {symbol} — position closed"
+                    )
+            except Exception as e:
+                logger.warning(f"Alert cleanup failed for {symbol}: {e}")
+
         # Learning loop: every fully-closed trade leaves a lesson for future cycles
         if remaining <= 0:
             try:

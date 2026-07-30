@@ -144,6 +144,15 @@ Price Alerts (between-cycle monitoring):
 - get_price_alerts() — see your active alerts
 Use these! You only get 4 scheduled cycles per day. If you see a stock close to a good entry but not quite there yet, set an alert instead of waiting 90 minutes.
 
+ALERT HYGIENE — every alert is a promise to your future self, and a stale one costs real money. When an alert fires it wakes you for a full ad-hoc cycle; if the reason for that alert no longer exists, you have spent API cost to be told about a stock you no longer care about.
+
+So each cycle, call get_price_alerts() and prune:
+- A take-profit alert for a stock you DIDN'T end up buying (the trade was rejected, or you changed your mind) → remove_price_alert it now. This is the most common leak.
+- A buy-the-dip alert on a stock you have since bought, or that no longer passes your checks → remove it.
+- An alert whose level is now far away or whose thesis has been overtaken by news → remove it, and set a new one at a level that reflects what you actually believe today.
+- Sold a position? Its take-profit alert is cancelled automatically — you do not need to do that one.
+Keep the alert list small and every entry live. An alert you would not act on if it fired right now should not exist.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INDIAN MARKET CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -108,3 +108,61 @@ class TestEvidenceQuality:
         r = trading.update_position_targets("INFY", STRONG, stop_loss_price=100.0)
         assert r["status"] == "rejected"
         assert "no position" in r["reason"]
+
+
+class TestAlertCleanupOnClose:
+    """A closed position's take-profit alert must not linger — a spurious
+    trigger costs a full ad-hoc Claude cycle in real API spend."""
+
+    def test_take_profit_alert_cancelled_on_full_exit(self, held, balanced_config):
+        db.insert("price_alerts", {
+            "session_id": held, "symbol": "GICRE", "target_price": 362.0,
+            "direction": "above", "margin_pct": 0.2, "reason": "take-profit",
+            "status": "active", "created_at": db.now_iso(), "cycle_number": 1,
+        })
+        ex = Executor(balanced_config, held)
+        with patch("aaitrade.tools.market.get_current_price",
+                   return_value={"symbol": "GICRE", "last_price": 362.5,
+                                 "change_percent": 1.0, "volume": 1, "open": 1,
+                                 "high": 1, "low": 1, "close": 1, "timestamp": ""}):
+            r = ex.execute({"action": "SELL", "symbol": "GICRE", "quantity": 100,
+                            "reason": "target", "confidence": "high", "flags": []})
+        assert r["status"] == "executed"
+        row = db.query_one(
+            "SELECT status FROM price_alerts WHERE session_id = ? AND symbol = 'GICRE'", (held,))
+        assert row["status"] == "cancelled"
+
+    def test_buy_the_dip_alert_survives_exit(self, held, balanced_config):
+        """A 'below' alert is re-entry interest — selling shouldn't kill it."""
+        db.insert("price_alerts", {
+            "session_id": held, "symbol": "GICRE", "target_price": 350.0,
+            "direction": "below", "margin_pct": 0.2, "reason": "re-entry",
+            "status": "active", "created_at": db.now_iso(), "cycle_number": 1,
+        })
+        ex = Executor(balanced_config, held)
+        with patch("aaitrade.tools.market.get_current_price",
+                   return_value={"symbol": "GICRE", "last_price": 362.5,
+                                 "change_percent": 1.0, "volume": 1, "open": 1,
+                                 "high": 1, "low": 1, "close": 1, "timestamp": ""}):
+            ex.execute({"action": "SELL", "symbol": "GICRE", "quantity": 100,
+                        "reason": "target", "confidence": "high", "flags": []})
+        row = db.query_one(
+            "SELECT status FROM price_alerts WHERE session_id = ? AND direction = 'below'", (held,))
+        assert row["status"] == "active"
+
+    def test_partial_exit_keeps_alert(self, held, balanced_config):
+        db.insert("price_alerts", {
+            "session_id": held, "symbol": "GICRE", "target_price": 362.0,
+            "direction": "above", "margin_pct": 0.2, "reason": "take-profit",
+            "status": "active", "created_at": db.now_iso(), "cycle_number": 1,
+        })
+        ex = Executor(balanced_config, held)
+        with patch("aaitrade.tools.market.get_current_price",
+                   return_value={"symbol": "GICRE", "last_price": 362.5,
+                                 "change_percent": 1.0, "volume": 1, "open": 1,
+                                 "high": 1, "low": 1, "close": 1, "timestamp": ""}):
+            ex.execute({"action": "SELL", "symbol": "GICRE", "quantity": 40,
+                        "reason": "partial", "confidence": "high", "flags": []})
+        row = db.query_one(
+            "SELECT status FROM price_alerts WHERE session_id = ? AND direction = 'above'", (held,))
+        assert row["status"] == "active", "still holding — alert stays live"
