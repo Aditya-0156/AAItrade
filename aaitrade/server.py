@@ -361,7 +361,8 @@ class TradingServer:
             disable_tool("remove_from_watchlist")
 
         # Set tool context
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis, pipeline
+        pipeline.set_session_id(session_id)
         portfolio_tools.set_session_id(session_id)
         memory.set_session_id(session_id)
         journal.set_session_id(session_id)

@@ -157,7 +157,8 @@ class SessionManager:
             disable_tool("remove_from_watchlist")
 
         # Inject session_id into tool modules that need it
-        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis, price_alerts
+        from aaitrade.tools import portfolio_tools, memory, journal, watchlist_tools, session_memory, session_analysis, price_alerts, pipeline
+        pipeline.set_session_id(self.session_id)
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)
         journal.set_session_id(self.session_id)
@@ -344,8 +345,19 @@ class SessionManager:
 
     # Fixed cycle slots: (hour, minute) in IST
     CYCLE_SLOTS = [(9, 30), (11, 0), (12, 30), (14, 0)]
+    # CONVICTION trades rarely and researches deeply — it does not need to look
+    # every 90 minutes. Two cycles: a deep research/decision cycle after the
+    # open settles, and an afternoon position review. Alerts cover the rest.
+    CONVICTION_SLOTS = [(11, 0), (14, 30)]
     CYCLE_WINDOW_MINUTES = 89  # A slot is valid to run up to 89 min after its start time
     CYCLE_DURATION_MINUTES = 5  # Max time a cycle takes — don't start if next slot is within this
+
+    @property
+    def _slots(self) -> list[tuple[int, int]]:
+        from aaitrade.config import TradingMode
+        if self.config.trading_mode == TradingMode.CONVICTION:
+            return self.CONVICTION_SLOTS
+        return self.CYCLE_SLOTS
 
     def _get_due_slot(self, now: datetime) -> tuple[int, int] | None:
         """Return the slot (hour, min) that is due to run right now, or None.
@@ -378,7 +390,7 @@ class SessionManager:
             except Exception:
                 pass
 
-        for i, (h, m) in enumerate(self.CYCLE_SLOTS):
+        for i, (h, m) in enumerate(self._slots):
             slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
 
             # Slot hasn't started yet today
@@ -391,8 +403,8 @@ class SessionManager:
                 continue
 
             # Check if next slot is starting very soon — don't start a cycle that would overlap
-            if i + 1 < len(self.CYCLE_SLOTS):
-                next_h, next_m = self.CYCLE_SLOTS[i + 1]
+            if i + 1 < len(self._slots):
+                next_h, next_m = self._slots[i + 1]
                 next_slot = now.replace(hour=next_h, minute=next_m, second=0, microsecond=0)
                 if (next_slot - now).total_seconds() < self.CYCLE_DURATION_MINUTES * 60:
                     continue
@@ -422,7 +434,7 @@ class SessionManager:
         if premarket > now and self._premarket_done_date != today_str:
             candidates.append((premarket, "pre-market checks"))
 
-        for h, m in self.CYCLE_SLOTS:
+        for h, m in self._slots:
             slot_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
             if slot_time > now:
                 candidates.append((slot_time, f"cycle slot {h:02d}:{m:02d}"))
@@ -859,8 +871,19 @@ class SessionManager:
             latest = db.query_one("SELECT MAX(scan_date) as d FROM scan_results")
             stale = True
             if latest and latest["d"]:
-                age_days = (now.date() - datetime.fromisoformat(latest["d"]).date()).days
-                stale = age_days > 3  # Friday's scan is still fine on Monday
+                # Fresh only if it came from the previous trading day (or today).
+                # A 3-day threshold let a single failed post-close scan leave the
+                # session trading on stale data for days — which is exactly what
+                # happened when the Kite token died on 31 Jul.
+                from aaitrade.holidays import is_trading_day
+                scan_date = datetime.fromisoformat(latest["d"]).date()
+                probe, prev_trading = now.date() - timedelta(days=1), None
+                for _ in range(7):
+                    if is_trading_day(probe):
+                        prev_trading = probe
+                        break
+                    probe -= timedelta(days=1)
+                stale = scan_date < (prev_trading or now.date())
             if stale:
                 logger.info("Scan missing/stale — running catch-up scan now")
                 run_daily_scan()
@@ -963,8 +986,9 @@ class SessionManager:
         """
         from aaitrade.tools import (
             portfolio_tools, memory, journal, watchlist_tools,
-            session_memory, session_analysis,
+            session_memory, session_analysis, pipeline,
         )
+        pipeline.set_session_id(self.session_id)
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)
         journal.set_session_id(self.session_id)
@@ -1034,9 +1058,17 @@ class SessionManager:
         model_override = None
         now_ist = datetime.now(_IST)
         planning_model = getattr(self.config, "planning_model", None)
-        if planning_model and planning_model != self.config.model and now_ist.hour < 11:
-            model_override = planning_model
-            logger.info(f"Planning cycle — using {planning_model}")
+        from aaitrade.config import TradingMode
+        if planning_model and planning_model != self.config.model:
+            if self.config.trading_mode == TradingMode.CONVICTION:
+                # The 11:00 cycle IS the research cycle here — that is where the
+                # deep model earns its cost. The afternoon review is mechanical.
+                if now_ist.hour < 13:
+                    model_override = planning_model
+                    logger.info(f"Conviction research cycle — using {planning_model}")
+            elif now_ist.hour < 11:
+                model_override = planning_model
+                logger.info(f"Planning cycle — using {planning_model}")
 
         # Get Claude's decisions (list — may contain multiple BUY/SELL/HOLDs)
         decisions = self.claude.make_decision(

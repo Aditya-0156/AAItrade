@@ -88,7 +88,7 @@ export const fetchSummary = (sessionId?: number) =>
 export interface StartSessionParams {
   name: string
   execution_mode: 'paper' | 'live'
-  trading_mode: 'safe' | 'balanced' | 'aggressive' | 'custom'
+  trading_mode: 'safe' | 'balanced' | 'aggressive' | 'conviction' | 'custom'
   starting_capital: number
   watchlist_path?: string
   allow_watchlist_adjustment?: boolean

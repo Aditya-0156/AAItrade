@@ -139,6 +139,8 @@ _TOOL_MODULES = [
     "aaitrade.tools.levels",
     "aaitrade.tools.insights",
     "aaitrade.tools.knowledge_tools",
+    "aaitrade.tools.amplitude",
+    "aaitrade.tools.pipeline",
 ]
 
 

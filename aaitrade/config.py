@@ -25,6 +25,7 @@ class TradingMode(str, Enum):
     SAFE = "safe"
     BALANCED = "balanced"
     AGGRESSIVE = "aggressive"
+    CONVICTION = "conviction"   # deep research, few big wins, low trade count
 
 
 # ── Risk Rules ─────────────────────────────────────────────────────────────────
@@ -78,6 +79,20 @@ RISK_PROFILES: dict[TradingMode, RiskRules] = {
         max_deployed=90.0,
         daily_loss_limit=8.0,
     ),
+    # CONVICTION — the opposite trade-off to the others. Few positions, deep
+    # research, targets of 5%+ instead of 1-2%, held days to weeks. Everything
+    # is a PERCENTAGE so the rules hold if capital is topped up later.
+    TradingMode.CONVICTION: RiskRules(
+        max_per_trade=40.0,      # a cap, not a target — allows real concentration
+        stop_loss=10.0,          # must sit outside normal noise, not inside it
+        take_profit=0.0,         # 0 = discretionary; the research sets the target
+        max_positions=6,
+        max_deployed=90.0,
+        daily_loss_limit=0.0,    # meaningless for multi-day holds
+        # Beyond the 10% stop so the stop fires first even on a full-size
+        # 40% position (40% x 10% = 4% of capital).
+        max_position_loss_pct=5.0,
+    ),
 }
 
 
@@ -102,6 +117,15 @@ MODE_MANDATES: dict[TradingMode, str] = {
         "reckless — every trade must still have a clear thesis and respect all "
         "hard risk rules. Aggressive means high-conviction, not impulsive."
     ),
+    TradingMode.CONVICTION: (
+        "Win big, and win rarely. You are not harvesting 1-2% wiggles — you are "
+        "hunting moves of 5% and more, and you may take days to research a single "
+        "name before committing. Trade infrequently and with real size when the "
+        "evidence is overwhelming. A month with four researched, profitable "
+        "positions beats one with forty rushed ones: every trade you skip costs "
+        "nothing, every trade you rush costs charges and capital. Patience is the "
+        "edge; the research is the work."
+    ),
 }
 
 
@@ -112,6 +136,7 @@ PROFIT_REINVEST_RATIO: dict[TradingMode, float] = {
     TradingMode.SAFE: 0.0,       # 0% reinvested, 100% secured
     TradingMode.BALANCED: 0.5,   # 50/50 split
     TradingMode.AGGRESSIVE: 1.0, # 100% reinvested
+    TradingMode.CONVICTION: 0.5, # 50/50 — compound half, bank half
 }
 
 

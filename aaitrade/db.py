@@ -87,6 +87,23 @@ def init_db():
         except Exception:
             pass
 
+    # Ensure candidates table exists (for existing DBs)
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS candidates ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, "
+                "symbol TEXT NOT NULL, stage TEXT NOT NULL, thesis TEXT, "
+                "target_pct REAL, stop_pct REAL, horizon_days INTEGER, conviction INTEGER, "
+                "findings TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+                "UNIQUE(session_id, symbol))"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_candidates_session ON candidates(session_id, stage)"
+            )
+    except Exception:
+        pass
+
     # Ensure exclusion + expense tables exist (for existing DBs)
     try:
         with get_connection() as conn:
@@ -363,6 +380,27 @@ CREATE TABLE IF NOT EXISTS stock_thesis_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_thesis_symbol ON stock_thesis_log(symbol, date);
+
+-- Multi-day research pipeline for CONVICTION sessions. A candidate can sit
+-- in RESEARCHING for days while conviction is built; this is the memory of
+-- work in progress that survives across cycles and restarts.
+CREATE TABLE IF NOT EXISTS candidates (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    INTEGER NOT NULL,
+    symbol        TEXT NOT NULL,
+    stage         TEXT NOT NULL,   -- watching/researching/ready/entered/rejected
+    thesis        TEXT,
+    target_pct    REAL,
+    stop_pct      REAL,
+    horizon_days  INTEGER,
+    conviction    INTEGER,         -- 1-10
+    findings      TEXT,            -- running research notes, appended over days
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE(session_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidates_session ON candidates(session_id, stage);
 
 -- Symbols the user trades personally in the same broker account.
 -- The system must never buy or sell these (broker pools shares per symbol

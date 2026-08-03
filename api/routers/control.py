@@ -71,8 +71,10 @@ async def start_session(req: StartSessionRequest):
 
     if req.execution_mode not in ("paper", "live"):
         raise HTTPException(400, "execution_mode must be 'paper' or 'live'")
-    if req.trading_mode not in ("safe", "balanced", "aggressive", "custom"):
-        raise HTTPException(400, "trading_mode must be 'safe', 'balanced', 'aggressive', or 'custom'")
+    if req.trading_mode not in ("safe", "balanced", "aggressive", "conviction", "custom"):
+        raise HTTPException(
+            400, "trading_mode must be 'safe', 'balanced', 'aggressive', 'conviction', or 'custom'"
+        )
     if req.starting_capital <= 0:
         raise HTTPException(400, "starting_capital must be positive")
     if not 0.0 <= req.profit_reinvest_ratio <= 1.0:

@@ -512,7 +512,7 @@ Macro/World News: {macro_news}
 FII/DII Flows: {fii_dii}{outlook_section}{policy_signals}
 
 🔎 SCANNER — top setups from full NSE-500 scan:
-{scanner_block}
+{scanner_block}{pipeline_section}
 
 Watchlist: {watchlist_summary}
 
@@ -570,6 +570,31 @@ class ContextBuilder:
 
         rules = self.config.risk_rules
         starting_capital = self.config.starting_capital
+
+        # CONVICTION mode is a different craft — deep research, few big wins —
+        # so it gets its own prompt rather than a tweak of the scalping one.
+        from aaitrade.config import TradingMode
+        if self.config.trading_mode == TradingMode.CONVICTION:
+            from aaitrade.prompts_conviction import CONVICTION_SYSTEM_PROMPT
+            prompt = CONVICTION_SYSTEM_PROMPT.format(
+                current_capital=session["current_capital"] if session else starting_capital,
+                secured_profit=session["secured_profit"] if session else 0,
+                current_day=session["current_day"] if session else 1,
+                current_time=datetime.now(_IST).strftime("%I:%M %p IST"),
+                mode_mandate=self.config.mode_mandate,
+                max_per_trade=rules.max_per_trade,
+                max_positions=rules.max_positions,
+                max_deployed=rules.max_deployed,
+                stop_loss=rules.stop_loss,
+                session_stop_loss=rules.session_stop_loss,
+                max_position_loss_pct=getattr(rules, "max_position_loss_pct", 5.0),
+                watchlist_text=watchlist_text,
+                watchlist_adjustment_block=watchlist_adjustment_block,
+            )
+            if closing_mode:
+                prompt += CLOSING_MODE_OVERRIDE
+            return prompt
+
         prompt = SYSTEM_PROMPT_TEMPLATE.format(
             execution_mode=self.config.execution_mode.value.upper(),
             trading_mode=self.config.trading_mode.value.upper(),
@@ -811,6 +836,19 @@ class ContextBuilder:
         except Exception:
             scanner_block = "No scan available yet."
 
+        # Research pipeline (conviction sessions carry work across days)
+        pipeline_section = ""
+        try:
+            from aaitrade.config import TradingMode
+            if self.config.trading_mode == TradingMode.CONVICTION:
+                from aaitrade.tools.pipeline import pipeline_briefing_block
+                pipeline_section = (
+                    "\n\n🔬 YOUR RESEARCH PIPELINE (finish what you started before hunting new names):\n"
+                    + pipeline_briefing_block(self.session_id)
+                )
+        except Exception:
+            pass
+
         # Policy signals: themes detected in today's news → beneficiaries
         try:
             from aaitrade.knowledge import policy_signals_block
@@ -835,6 +873,7 @@ class ContextBuilder:
             outlook_section=outlook_section,
             policy_signals=policy_signals,
             scanner_block=scanner_block,
+            pipeline_section=pipeline_section,
             watchlist_summary=watchlist_summary,
             open_positions=open_positions,
             lessons_block=lessons_block,
