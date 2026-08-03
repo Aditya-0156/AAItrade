@@ -97,7 +97,14 @@ def record_api_usage(session_id: int | None, cycle_number: int | None, model: st
 def ensure_monthly_subscription(session_id: int | None = None,
                                 amount: float = ZERODHA_MONTHLY_INR,
                                 label: str = "Zerodha Kite Connect API") -> None:
-    """Record the monthly broker API fee once per calendar month (idempotent)."""
+    """Record the monthly broker API fee once per calendar month (idempotent).
+
+    There is ONE Zerodha subscription for the whole account, however many
+    sessions run. The uniqueness check is deliberately (label, period) with no
+    session in it, and the row is stored with session_id=None, so a second or
+    third session calling this in the same month finds the existing entry and
+    returns without booking another Rs 500.
+    """
     period = datetime.now(_IST).strftime("%Y-%m")
     try:
         existing = db.query_one(
@@ -107,7 +114,7 @@ def ensure_monthly_subscription(session_id: int | None = None,
         if existing:
             return
         db.insert("expenses", {
-            "session_id": session_id,
+            "session_id": None,   # account-level cost, never attributed to one session
             "category": "subscription",
             "label": label,
             "amount_inr": amount,

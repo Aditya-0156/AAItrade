@@ -140,3 +140,41 @@ class TestConvictionPrompt:
         from aaitrade.context_builder import ContextBuilder
         p = ContextBuilder(balanced_config, session_with_watchlist).build_system_prompt()
         assert "AAItrade Conviction" not in p
+
+
+class TestSingleZerodhaSubscription:
+    """One Zerodha API subscription for the whole account, however many
+    sessions run. A second session must never book another Rs 500."""
+
+    def test_two_sessions_book_one_subscription(self, in_memory_db, session_with_watchlist):
+        from aaitrade.costs import ensure_monthly_subscription, expense_summary
+        second = db.insert("sessions", {
+            "name": "conviction", "execution_mode": "live", "trading_mode": "conviction",
+            "starting_capital": 100000, "current_capital": 100000, "secured_profit": 0,
+            "total_days": 99999, "current_day": 1, "watchlist_path": "x",
+            "allow_watchlist_adjustment": 1, "profit_reinvest_ratio": 0.5,
+            "status": "active", "started_at": db.now_iso(), "config_json": "{}",
+        })
+        ensure_monthly_subscription(session_with_watchlist)
+        ensure_monthly_subscription(second)
+        ensure_monthly_subscription(second)
+
+        rows = db.query("SELECT session_id, amount_inr FROM expenses WHERE category = 'subscription'")
+        assert len(rows) == 1, "only one Zerodha subscription exists"
+        assert rows[0]["amount_inr"] == 500.0
+        assert rows[0]["session_id"] is None, "account-level, not tied to a session"
+        assert expense_summary(second)["subscriptions"] == 500.0
+
+
+class TestConvictionModelPolicy:
+    """Conviction runs on Sonnet + Haiku only — no Opus."""
+
+    def test_default_models_are_sonnet_and_haiku(self):
+        cfg = SessionConfig(
+            execution_mode=ExecutionMode.LIVE, trading_mode=TradingMode.CONVICTION,
+            starting_capital=100000, total_days=99999,
+            watchlist_path="config/watchlist_seed.yaml",
+        )
+        assert "sonnet" in cfg.planning_model.lower()
+        assert "haiku" in cfg.model.lower()
+        assert "opus" not in (cfg.planning_model + cfg.model).lower()

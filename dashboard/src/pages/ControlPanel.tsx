@@ -225,7 +225,6 @@ function NewSessionForm({ onClose }: { onClose: () => void }) {
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
             >
               <option value="claude-sonnet-5">Sonnet 5 — recommended (deep reasoning where it pays)</option>
-              <option value="claude-opus-5">Opus 5 — deepest research (for Conviction mode)</option>
               <option value="claude-haiku-4-5-20251001">Haiku 4.5 (cheapest — same as execution)</option>
             </select>
             <p className="text-xs text-gray-600 mt-0.5">
