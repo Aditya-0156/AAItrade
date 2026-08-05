@@ -7,14 +7,19 @@ The Zerodha account also holds the user's PERSONAL trades (e.g. 254 HDFCBANK
 bought by hand). Those must never be touched, sold, counted as P&L, or
 adopted into the system's portfolio.
 
-Therefore this module is REPORT-ONLY:
+Therefore this module never changes WHAT or HOW MUCH we own:
 - It NEVER inserts a Kite holding into the portfolio table (that would steal
   the user's personal shares — HDFCBANK is on the seed watchlist, so the old
   "adopt watchlist symbols" behaviour would have done exactly that).
 - It NEVER deletes a DB position because Kite doesn't show it.
-- It NEVER edits avg_price or quantity.
-It only warns when Kite holds FEWER shares than the system thinks it owns —
-the one case that actually breaks the system's ability to sell.
+- It NEVER edits quantity.
+It warns when Kite holds FEWER shares than the system thinks it owns — the one
+case that breaks our ability to sell.
+
+The single exception is COST BASIS: when the broker holds exactly the quantity
+we claim (proving no personal lot is blended in), the broker's average price is
+authoritative and we adopt it. Quantities are never touched; only the price we
+believe we paid, which the broker knows better than we do.
 """
 
 from __future__ import annotations
@@ -30,9 +35,10 @@ logger = logging.getLogger(__name__)
 
 
 def sync_portfolio_with_kite(session_id: int, kite) -> dict:
-    """Reconcile (read-only) the session's portfolio against Zerodha holdings.
+    """Reconcile the session's portfolio against Zerodha holdings.
 
-    Returns a report. Makes NO writes to the portfolio table.
+    Quantities are never modified. The only write is a cost-basis correction
+    when the broker holds exactly the quantity we claim — see module docstring.
     """
     session = db.query_one(
         "SELECT id, execution_mode FROM sessions WHERE id = ?",
@@ -45,6 +51,7 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
 
     warnings: list[dict] = []
     external: list[dict] = []
+    corrections: list[dict] = []
 
     try:
         kite_holdings = kite.holdings()
@@ -79,6 +86,56 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
                     f"the system tries to sell."
                 )
 
+        # 1b. COST-BASIS DRIFT. The broker is the authority on what a lot
+        #     actually cost. Drift appears when a sell is netted against an
+        #     unsettled (T+1) buy — Zerodha treats it as an intraday round
+        #     trip and the original delivery lot survives untouched, while
+        #     our books have moved on to the re-entry price. That leaves the
+        #     system managing a position against a false basis: wrong P&L,
+        #     wrong distance to target.
+        #
+        #     Correcting is only safe when the broker quantity EXACTLY matches
+        #     ours — that proves there is no personal lot blended into the
+        #     broker's average. When the user also owns the symbol, the two
+        #     cost bases cannot be disentangled, so we only warn.
+        for symbol, pos in db_map.items():
+            kite_pos = next(
+                (h for h in kite_holdings if h["tradingsymbol"] == symbol), None
+            )
+            if not kite_pos:
+                continue
+            broker_avg = kite_pos.get("average_price") or 0
+            broker_total = (kite_pos.get("quantity") or 0) + (kite_pos.get("t1_quantity") or 0)
+            if broker_avg <= 0 or pos["avg_price"] <= 0:
+                continue
+            drift_pct = abs(broker_avg - pos["avg_price"]) / pos["avg_price"] * 100
+            if drift_pct < 0.5:
+                continue
+
+            if broker_total == pos["quantity"]:
+                db.update("portfolio", pos["id"], {"avg_price": round(broker_avg, 2)})
+                corrections.append({
+                    "symbol": symbol, "type": "cost_basis_corrected",
+                    "was": pos["avg_price"], "now": round(broker_avg, 2),
+                    "drift_pct": round(drift_pct, 2),
+                })
+                logger.warning(
+                    f"RECONCILE: {symbol} cost basis corrected {pos['avg_price']} -> "
+                    f"{broker_avg} ({drift_pct:.1f}% drift). Broker is authoritative for a "
+                    f"lot we exclusively own."
+                )
+            else:
+                warnings.append({
+                    "symbol": symbol, "type": "cost_basis_drift_unresolvable",
+                    "db_avg": pos["avg_price"], "broker_avg": round(broker_avg, 2),
+                    "drift_pct": round(drift_pct, 2),
+                })
+                logger.error(
+                    f"RECONCILE: {symbol} cost basis differs ({pos['avg_price']} vs broker "
+                    f"{broker_avg}) but the broker also holds the user's shares — cannot "
+                    f"separate the lots. NOT corrected; investigate manually."
+                )
+
         # 2. Everything the broker holds beyond what the system bought is the
         #    USER'S OWN. Log it as external so it's visible, never adopt it.
         for symbol, broker in kite_qty.items():
@@ -107,13 +164,15 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
     status = "ok" if not warnings else "warnings"
     logger.info(
         f"Portfolio reconciliation: {len(warnings)} warning(s), "
+        f"{len(corrections)} cost-basis correction(s), "
         f"{len(external)} external holding(s) ignored"
     )
     return {
         "status": status,
         "warnings": warnings,
+        "corrections": corrections,
         "external_holdings": external,
-        "read_only": True,
+        "quantities_read_only": True,
         "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 

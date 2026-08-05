@@ -941,6 +941,16 @@ class SessionManager:
                             f"The system will not sell more than it owns, but investigate.",
                             parse_mode=None,
                         )
+                    for c in (report.get("corrections") or []):
+                        msg = (
+                            f"🔧 {c['symbol']} cost basis corrected: ₹{c['was']} → ₹{c['now']} "
+                            f"({c['drift_pct']}% drift). The broker's average is authoritative "
+                            f"for a lot we exclusively own — P&L and targets were being measured "
+                            f"against the wrong entry price."
+                        )
+                        logger.warning(msg)
+                        if bot:
+                            bot.send(msg, parse_mode=None)
                     ext = report.get("external_holdings") or []
                     if ext:
                         logger.info(

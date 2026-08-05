@@ -46,7 +46,7 @@ class TestPersonalHoldingsAreNeverAdopted:
             "SELECT * FROM portfolio WHERE session_id = ?", (session_with_watchlist,)
         )
         assert positions == [], "user's personal shares must NEVER enter the system portfolio"
-        assert report["read_only"] is True
+        assert report["quantities_read_only"] is True
         ext = {e["symbol"]: e["external_qty"] for e in report["external_holdings"]}
         assert ext["HDFCBANK"] == 254  # 220 settled + 34 T1
 
@@ -72,7 +72,10 @@ class TestPersonalHoldingsAreNeverAdopted:
         assert pos["quantity"] == 10, "system quantity must not be overwritten by broker total"
         assert pos["avg_price"] == 800.0, "system avg price must not be overwritten"
         assert report["external_holdings"][0]["external_qty"] == 254
-        assert report["warnings"] == []
+        # Broker average (745) blends the user's 254 shares with our 10, so the
+        # basis cannot be separated — warn, never adopt.
+        assert report["corrections"] == []
+        assert all(w["type"] == "cost_basis_drift_unresolvable" for w in report["warnings"])
 
     def test_under_backed_position_warns_but_does_not_mutate(self, in_memory_db, session_with_watchlist):
         _live_session(session_with_watchlist)
@@ -218,3 +221,64 @@ class TestCostTracking:
         assert s["net_profit_after_all_expenses"] == pytest.approx(
             153.11 - s["api_cost"] - 500.0, abs=0.02
         )
+
+
+class TestCostBasisDrift:
+    """Selling T+1 shares and re-buying makes Zerodha net the round trip, so the
+    original delivery lot survives and our books drift. Real case: CDSL recorded
+    at 1348.70 while the broker still showed 1330.30."""
+
+    def test_drift_corrected_when_lot_is_exclusively_ours(self, in_memory_db, session_with_watchlist):
+        _live_session(session_with_watchlist)
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "CDSL",
+            "quantity": 37, "avg_price": 1348.70,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        kite = _fake_kite([
+            {"tradingsymbol": "CDSL", "quantity": 37, "t1_quantity": 0, "average_price": 1330.30},
+        ])
+        report = sync_portfolio_with_kite(session_with_watchlist, kite)
+
+        pos = db.query_one(
+            "SELECT avg_price, quantity FROM portfolio WHERE session_id = ? AND symbol = 'CDSL'",
+            (session_with_watchlist,),
+        )
+        assert pos["avg_price"] == 1330.30, "broker is authoritative for a lot we alone own"
+        assert pos["quantity"] == 37, "quantity must never be touched"
+        assert report["corrections"][0]["symbol"] == "CDSL"
+
+    def test_drift_only_warned_when_personal_lot_is_blended(self, in_memory_db, session_with_watchlist):
+        """Broker average blends the user's shares — the two bases can't be separated."""
+        _live_session(session_with_watchlist)
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "HDFCBANK",
+            "quantity": 19, "avg_price": 753.40,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        kite = _fake_kite([
+            {"tradingsymbol": "HDFCBANK", "quantity": 273, "t1_quantity": 0, "average_price": 744.50},
+        ])
+        report = sync_portfolio_with_kite(session_with_watchlist, kite)
+
+        pos = db.query_one(
+            "SELECT avg_price FROM portfolio WHERE session_id = ? AND symbol = 'HDFCBANK'",
+            (session_with_watchlist,),
+        )
+        assert pos["avg_price"] == 753.40, "must NOT adopt a blended average"
+        assert report["corrections"] == []
+        assert any(w["type"] == "cost_basis_drift_unresolvable" for w in report["warnings"])
+
+    def test_small_differences_ignored(self, in_memory_db, session_with_watchlist):
+        _live_session(session_with_watchlist)
+        db.insert("portfolio", {
+            "session_id": session_with_watchlist, "symbol": "TCS",
+            "quantity": 5, "avg_price": 3000.00,
+            "stop_loss_price": None, "take_profit_price": None,
+            "opened_at": db.now_iso(),
+        })
+        kite = _fake_kite([{"tradingsymbol": "TCS", "quantity": 5, "t1_quantity": 0, "average_price": 3005.0}])
+        report = sync_portfolio_with_kite(session_with_watchlist, kite)
+        assert report["corrections"] == [], "rounding-level differences are noise"
