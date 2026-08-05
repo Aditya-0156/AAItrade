@@ -282,3 +282,72 @@ class TestCostBasisDrift:
         kite = _fake_kite([{"tradingsymbol": "TCS", "quantity": 5, "t1_quantity": 0, "average_price": 3005.0}])
         report = sync_portfolio_with_kite(session_with_watchlist, kite)
         assert report["corrections"] == [], "rounding-level differences are noise"
+
+
+class TestCorrectionPropagates:
+    """A basis fixed in one table is not fixed. The journal is what the model
+    reads for its thesis, and the memory is what it narrates from — the live
+    CDSL correction reached `portfolio` and the other two kept 1348.70."""
+
+    def _cdsl_position(self, sid):
+        db.insert("portfolio", {
+            "session_id": sid, "symbol": "CDSL", "quantity": 37,
+            "avg_price": 1348.70, "stop_loss_price": None,
+            "take_profit_price": None, "opened_at": db.now_iso(),
+        })
+
+    def _kite(self):
+        return _fake_kite([
+            {"tradingsymbol": "CDSL", "quantity": 37, "t1_quantity": 0, "average_price": 1330.30},
+        ])
+
+    def test_open_journal_entry_is_corrected(self, in_memory_db, session_with_watchlist):
+        _live_session(session_with_watchlist)
+        self._cdsl_position(session_with_watchlist)
+        jid = db.insert("trade_journal", {
+            "session_id": session_with_watchlist, "symbol": "CDSL",
+            "entry_price": 1348.70, "reason": "range oscillator",
+            "key_thesis": "bounce to resistance", "target_price": 1353.71,
+            "stop_price": 1133.61, "status": "open", "opened_at": db.now_iso(),
+        })
+        report = sync_portfolio_with_kite(session_with_watchlist, self._kite())
+
+        assert db.query_one("SELECT entry_price FROM trade_journal WHERE id = ?", (jid,))["entry_price"] == 1330.30
+        assert report["corrections"][0]["journal_updated"] is True
+
+    def test_closed_journal_entry_is_left_alone(self, in_memory_db, session_with_watchlist):
+        """A closed trade is settled history — its recorded entry stays put."""
+        _live_session(session_with_watchlist)
+        self._cdsl_position(session_with_watchlist)
+        closed = db.insert("trade_journal", {
+            "session_id": session_with_watchlist, "symbol": "CDSL",
+            "entry_price": 1300.00, "reason": "earlier round trip",
+            "key_thesis": "done", "target_price": 1346.22, "stop_price": 1135.27,
+            "status": "closed", "opened_at": db.now_iso(),
+        })
+        sync_portfolio_with_kite(session_with_watchlist, self._kite())
+        assert db.query_one("SELECT entry_price FROM trade_journal WHERE id = ?", (closed,))["entry_price"] == 1300.00
+
+    def test_session_memory_gets_a_correction_note(self, in_memory_db, session_with_watchlist):
+        _live_session(session_with_watchlist)
+        self._cdsl_position(session_with_watchlist)
+        db.insert("session_memory", {
+            "session_id": session_with_watchlist,
+            "content": "POSITIONS:\n- CDSL: 37@1348.70, target 1353.71, Day 1.",
+            "updated_at": db.now_iso(), "cycle_number": 43,
+        })
+        sync_portfolio_with_kite(session_with_watchlist, self._kite())
+
+        content = db.query_one(
+            "SELECT content FROM session_memory WHERE session_id = ?",
+            (session_with_watchlist,),
+        )["content"]
+        assert "SYSTEM CORRECTION" in content
+        assert "1330.3" in content
+        assert "is wrong" in content, "must tell the model the old number is stale"
+
+    def test_no_memory_row_is_not_an_error(self, in_memory_db, session_with_watchlist):
+        _live_session(session_with_watchlist)
+        self._cdsl_position(session_with_watchlist)
+        report = sync_portfolio_with_kite(session_with_watchlist, self._kite())
+        assert report["corrections"][0]["symbol"] == "CDSL"

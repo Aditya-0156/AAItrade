@@ -114,11 +114,27 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
 
             if broker_total == pos["quantity"]:
                 db.update("portfolio", pos["id"], {"avg_price": round(broker_avg, 2)})
+                # The journal carries the SAME basis and is what the model reads
+                # back when it reasons about a position. Correcting only the
+                # portfolio leaves the two disagreeing, and the model trusts the
+                # journal — so the false entry price survives the fix.
+                journal = db.query_one(
+                    "SELECT id FROM trade_journal WHERE session_id = ? AND symbol = ? "
+                    "AND status = 'open' ORDER BY id DESC",
+                    (session_id, symbol),
+                )
+                if journal:
+                    db.update("trade_journal", journal["id"],
+                              {"entry_price": round(broker_avg, 2)})
                 corrections.append({
                     "symbol": symbol, "type": "cost_basis_corrected",
                     "was": pos["avg_price"], "now": round(broker_avg, 2),
                     "drift_pct": round(drift_pct, 2),
+                    "journal_updated": bool(journal),
                 })
+                _note_correction_in_memory(
+                    session_id, symbol, pos["avg_price"], round(broker_avg, 2)
+                )
                 logger.warning(
                     f"RECONCILE: {symbol} cost basis corrected {pos['avg_price']} -> "
                     f"{broker_avg} ({drift_pct:.1f}% drift). Broker is authoritative for a "
@@ -175,6 +191,35 @@ def sync_portfolio_with_kite(session_id: int, kite) -> dict:
         "quantities_read_only": True,
         "timestamp": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+
+def _note_correction_in_memory(session_id: int, symbol: str, was: float, now: float) -> None:
+    """Append a correction line to the session's self-maintained memory.
+
+    The memory is free text the model rewrites each cycle, and it copies
+    position prices into it. A basis fixed in the tables therefore keeps
+    circulating in the narrative — the live memory still read
+    "CDSL: 37@1348.70" after the tables said 1330.30. Writing the correction
+    where the model will read it is what actually stops the stale number.
+    """
+    try:
+        row = db.query_one(
+            "SELECT id, content FROM session_memory WHERE session_id = ?", (session_id,)
+        )
+        if not row:
+            return
+        note = (
+            f"\n\n[SYSTEM CORRECTION {datetime.now(_IST).strftime('%Y-%m-%d %H:%M')}] "
+            f"{symbol} entry price corrected ₹{was} → ₹{now} (broker is authoritative). "
+            f"Any earlier note in this memory quoting ₹{was} for {symbol} is wrong — "
+            f"use ₹{now} and recompute P&L and distance-to-target from it."
+        )
+        db.update("session_memory", row["id"], {
+            "content": (row["content"] or "") + note,
+            "updated_at": db.now_iso(),
+        })
+    except Exception as e:
+        logger.warning(f"Could not note {symbol} correction in session memory: {e}")
 
 
 def external_holdings_note(session_id: int, kite) -> str:
