@@ -265,10 +265,25 @@ class Executor:
 
         # 10. Compute stop-loss and take-profit if Claude didn't provide them
         # If the rule is 0, it means "no hard limit" — leave it to Claude's discretion
+        #
+        # Falling back is not free: the mode default (e.g. +8% / -15%) can be far
+        # wider than the level the model actually reasoned to. ADANIPORTS was
+        # bought with a stated 1756 target and ended up managed to 1845.72 purely
+        # because the argument never arrived. Log it loudly so a silent swap
+        # between "the model's plan" and "the mode default" is visible.
         if not stop_loss_price and self.rules.stop_loss > 0:
             stop_loss_price = round(price * (1 - self.rules.stop_loss / 100), 2)
+            logger.warning(
+                f"{symbol}: no stop_loss_price from the model — falling back to the "
+                f"{self.rules.stop_loss}% mode default (₹{stop_loss_price}). The position "
+                f"is now managed to a level the model did not choose."
+            )
         if not take_profit_price and self.rules.take_profit > 0:
             take_profit_price = round(price * (1 + self.rules.take_profit / 100), 2)
+            logger.warning(
+                f"{symbol}: no take_profit_price from the model — falling back to the "
+                f"{self.rules.take_profit}% mode default (₹{take_profit_price})."
+            )
 
         # ── All checks passed — execute ──
 
@@ -276,6 +291,48 @@ class Executor:
             return self._simulate_buy(symbol, quantity, price, stop_loss_price, take_profit_price, decision)
         else:
             return self._live_buy(symbol, quantity, price, stop_loss_price, take_profit_price, decision)
+
+    def _ensure_position_alerts(self, symbol: str, stop_loss, take_profit) -> None:
+        """Arm price alerts on a freshly opened position.
+
+        Between scheduled cycles the system is blind unless an alert wakes it.
+        Setting one was previously left entirely to the model, and it forgot:
+        the live aggressive session held ADANIPORTS and CDSL — about half its
+        deployed capital — with no alert at all, so a target could be hit and
+        given back inside a single gap between cycles.
+
+        These are a floor, not a ceiling. The model can still cancel or replace
+        them; we only guarantee the position is never completely unwatched.
+        """
+        try:
+            from aaitrade.tools.price_alerts import cancel_alerts_for  # noqa: F401
+            for price_level, direction, label in (
+                (take_profit, "above", "target"),
+                (stop_loss, "below", "stop"),
+            ):
+                if not price_level or price_level <= 0:
+                    continue
+                existing = db.query_one(
+                    "SELECT id FROM price_alerts WHERE session_id = ? AND symbol = ? "
+                    "AND direction = ? AND status = 'active'",
+                    (self.session_id, symbol, direction),
+                )
+                if existing:
+                    continue
+                db.insert("price_alerts", {
+                    "session_id": self.session_id,
+                    "symbol": symbol,
+                    "target_price": round(float(price_level), 2),
+                    "direction": direction,
+                    "margin_pct": 0.2,
+                    "reason": f"Auto-armed on entry — {label} for the open position.",
+                    "status": "active",
+                    "created_at": db.now_iso(),
+                    "cycle_number": self.cycle_number if hasattr(self, "cycle_number") else None,
+                })
+                logger.info(f"Auto-armed {direction} alert for {symbol} @ ₹{price_level}")
+        except Exception as e:
+            logger.warning(f"Could not auto-arm alerts for {symbol}: {e}")
 
     def _simulate_buy(self, symbol, quantity, price, stop_loss, take_profit, decision) -> dict:
         """Paper mode: record the trade without placing a real order."""
@@ -370,6 +427,8 @@ class Executor:
                         "stop_price": stop_loss or 0,
                         "target_price": take_profit or 0,
                     })
+
+        self._ensure_position_alerts(symbol, stop_loss, take_profit)
 
         return {
             "status": "executed",
@@ -587,6 +646,8 @@ class Executor:
                             "stop_price": stop_loss or 0,
                             "take_profit_price": take_profit or 0,
                         })
+
+            self._ensure_position_alerts(symbol, stop_loss, take_profit)
 
             logger.info(f"[LIVE] BUY {symbol} x{quantity} @ ₹{actual_price:.2f} | Order: {order_id}")
             return {"status": "executed", "mode": "live", "order_id": order_id, "symbol": symbol, "quantity": quantity, "price": actual_price}

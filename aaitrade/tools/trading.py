@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from aaitrade.tools import register_tool
 from aaitrade import db
+from aaitrade.textclean import clean_model_text, looks_corrupted
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -217,6 +218,32 @@ def _research_gate(symbol: str, why_now: str) -> dict | None:
     except Exception as e:
         logger.warning(f"Research gate check failed for {symbol}: {e}")
 
+    # Gate 1b: CONVICTION only — the amplitude check is what separates a
+    # reachable target from an unwinnable one. The prompt calls it mandatory;
+    # experience says a prompt instruction alone gets skipped, so enforce it.
+    try:
+        sess = db.query_one("SELECT trading_mode FROM sessions WHERE id = ?", (_session_id,))
+        if sess and sess["trading_mode"] == "conviction":
+            checked_amp = db.query_one(
+                "SELECT 1 FROM tool_calls WHERE session_id = ? AND cycle_number = ? "
+                "AND tool_name = 'analyse_amplitude' AND parameters LIKE ?",
+                (_session_id, _cycle_number, f'%"{symbol}"%'),
+            )
+            if not checked_amp:
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"BLOCKED: run analyse_amplitude('{symbol}', target_pct, horizon_days) "
+                        f"before buying. This session targets 5%+ moves, and a target is only "
+                        f"real if the stock can travel that far in your holding window AND the "
+                        f"move is bigger than its normal drop against you. Skipping this check "
+                        f"is how a 1.4% target got set on a stock that swings 4.5% — the trade "
+                        f"was lost before it was placed. Run it, then retry."
+                    ),
+                }
+    except Exception as e:
+        logger.warning(f"Amplitude gate check failed for {symbol}: {e}")
+
     # Gate 2: is there a real qualitative story?
     text = (why_now or "").strip()
     if len(text) < 40:
@@ -326,6 +353,17 @@ def execute_trade(
     thesis: str = "",
     why_now: str = "",
 ) -> dict:
+
+    # Model text occasionally carries leaked tool-call markup; it corrupts the
+    # journal and signals that an argument was swallowed on the way in.
+    if looks_corrupted(reason) or looks_corrupted(why_now):
+        logger.error(
+            f"{symbol}: tool-call markup leaked into the model's text. Cleaning it, but "
+            f"an argument (often stop/target) was likely lost — check the levels used."
+        )
+    reason = clean_model_text(reason)
+    why_now = clean_model_text(why_now)
+    thesis = clean_model_text(thesis)
     if not _executor:
         return {"status": "error", "reason": "Executor not initialized — cannot execute trade"}
 

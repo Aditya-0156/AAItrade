@@ -11,6 +11,10 @@ from aaitrade.config import TradingMode, RISK_PROFILES, SessionConfig, Execution
 from aaitrade.tools.amplitude import analyse_amplitude
 from aaitrade.tools import pipeline
 
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+_IST_T = _tz(_td(hours=5, minutes=30))
+_TRADING_HOURS = _dt(2026, 8, 5, 12, 0, tzinfo=_IST_T)
+
 
 def _candles(n, start, daily_move_pct, drift_pct=0.0, seed=3):
     """Synthetic series with a controllable daily amplitude."""
@@ -178,3 +182,74 @@ class TestConvictionModelPolicy:
         assert "sonnet" in cfg.planning_model.lower()
         assert "haiku" in cfg.model.lower()
         assert "opus" not in (cfg.planning_model + cfg.model).lower()
+
+
+class TestAmplitudeGate:
+    """The amplitude check is mandatory for conviction buys — enforced in code,
+    because the live session ignored the prompt instruction entirely."""
+
+    @pytest.fixture
+    def conviction_session(self, in_memory_db, balanced_config, session_with_watchlist):
+        from aaitrade.executor import Executor
+        from aaitrade.tools import trading
+        db.update("sessions", session_with_watchlist, {"trading_mode": "conviction"})
+        ex = Executor(balanced_config, session_with_watchlist)
+        trading.set_trading_context(ex, session_with_watchlist, 1)
+        # satisfy the news gate so we isolate the amplitude gate
+        db.insert("tool_calls", {
+            "session_id": session_with_watchlist, "cycle_number": 1,
+            "tool_name": "get_stock_news",
+            "parameters": '{"symbol": "RELIANCE"}',
+            "result_summary": "{}", "called_at": db.now_iso(),
+        })
+        return session_with_watchlist
+
+    def _why(self):
+        return ("Upstream producer at 7x earnings after a stabilised decline; crude just "
+                "broke to a multi-month high which lifts realised prices directly.")
+
+    def test_buy_blocked_without_amplitude_check(self, conviction_session):
+        from unittest.mock import patch
+        from aaitrade.tools import trading
+        from tests.conftest import make_price
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 1000)), \
+             patch.object(trading, "datetime") as dt:
+            dt.now.return_value = _TRADING_HOURS
+            r = trading.execute_trade("BUY", "RELIANCE", 2, reason="x", why_now=self._why())
+        assert r["status"] == "rejected"
+        assert "analyse_amplitude" in r["reason"]
+
+    def test_buy_allowed_after_amplitude_check(self, conviction_session):
+        from unittest.mock import patch
+        from aaitrade.tools import trading
+        from tests.conftest import make_price
+        db.insert("tool_calls", {
+            "session_id": conviction_session, "cycle_number": 1,
+            "tool_name": "analyse_amplitude",
+            "parameters": '{"symbol": "RELIANCE", "target_pct": 6}',
+            "result_summary": "{}", "called_at": db.now_iso(),
+        })
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 1000)), \
+             patch.object(trading, "datetime") as dt:
+            dt.now.return_value = _TRADING_HOURS
+            r = trading.execute_trade("BUY", "RELIANCE", 2, reason="x", why_now=self._why())
+        assert r["status"] == "executed"
+
+    def test_other_modes_are_not_gated(self, in_memory_db, balanced_config, session_with_watchlist):
+        """The scalping session sizes differently and must not be blocked by this."""
+        from unittest.mock import patch
+        from aaitrade.executor import Executor
+        from aaitrade.tools import trading
+        from tests.conftest import make_price
+        ex = Executor(balanced_config, session_with_watchlist)
+        trading.set_trading_context(ex, session_with_watchlist, 1)
+        db.insert("tool_calls", {
+            "session_id": session_with_watchlist, "cycle_number": 1,
+            "tool_name": "get_stock_news", "parameters": '{"symbol": "RELIANCE"}',
+            "result_summary": "{}", "called_at": db.now_iso(),
+        })
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 1000)), \
+             patch.object(trading, "datetime") as dt:
+            dt.now.return_value = _TRADING_HOURS
+            r = trading.execute_trade("BUY", "RELIANCE", 2, reason="x", why_now=self._why())
+        assert r["status"] == "executed"
