@@ -79,6 +79,14 @@ def init_db():
     except Exception:
         pass  # Column already exists
 
+    # Trailing-exit state: highest price seen since the target was crossed.
+    # Lives on the position so a monitor restart doesn't forget the high.
+    try:
+        with get_connection() as conn:
+            conn.execute("ALTER TABLE portfolio ADD COLUMN trail_high REAL")
+    except Exception:
+        pass  # Column already exists
+
     # Add trend columns to scan_results (for existing DBs)
     for _col, _type in (("trend_verdict", "TEXT"), ("ret_3m", "REAL"), ("pos_60d", "REAL")):
         try:
@@ -261,6 +269,29 @@ CREATE TABLE IF NOT EXISTS portfolio (
     take_profit_price REAL,
     opened_at       TEXT NOT NULL,
     UNIQUE(session_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS entry_plans (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id),
+    symbol          TEXT NOT NULL,
+    level           REAL NOT NULL,              -- the price level being stalked
+    quantity        INTEGER NOT NULL,
+    discount_pct    REAL NOT NULL,              -- calibrated overshoot below level (Trigger A)
+    stop_loss_price REAL,
+    take_profit_price REAL,
+    reason          TEXT,                       -- thesis; carried onto the trade at fill
+    status          TEXT NOT NULL DEFAULT 'stalking',  -- stalking/partial/filled/expired/cancelled/runaway
+    fill_mode       TEXT NOT NULL DEFAULT 'split',     -- split (half confirm, half discount) / single
+    filled_quantity INTEGER NOT NULL DEFAULT 0,
+    touched         INTEGER NOT NULL DEFAULT 0, -- price has touched the level since creation
+    touch_low       REAL,                       -- lowest low seen since first touch
+    fill_price      REAL,
+    trigger         TEXT,                       -- discount / confirmed / mixed
+    created_at      TEXT NOT NULL,
+    expires_at      TEXT NOT NULL,
+    resolved_at     TEXT,
+    cycle_number    INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS decisions (

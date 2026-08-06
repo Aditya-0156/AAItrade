@@ -35,7 +35,8 @@ CYCLE_SLOTS = [(9, 30), (11, 0), (12, 30), (14, 0)]
 class PriceMonitor:
     """Background thread that monitors price alerts and triggers ad-hoc cycles."""
 
-    def __init__(self, session_id: int, trigger_callback, max_position_loss_pct: float = 1.5):
+    def __init__(self, session_id: int, trigger_callback, max_position_loss_pct: float = 1.5,
+                 execute_callback=None):
         """
         Args:
             session_id: The session to monitor alerts for.
@@ -44,9 +45,14 @@ class PriceMonitor:
                               Each dict has: id, symbol, target_price, direction, reason, current_price
             max_position_loss_pct: hard cap — a position losing more than this %
                               of effective capital triggers a FORCED exit.
+            execute_callback: Mechanical execution path for entry-plan fills and
+                              trailing exits — trades that need NO model decision.
+                              Signature: callback(decision: dict, context: str) -> dict
+                              (decision is an executor-shaped BUY/SELL dict.)
         """
         self.session_id = session_id
         self._trigger_callback = trigger_callback
+        self._execute_callback = execute_callback
         self._max_position_loss_pct = max_position_loss_pct
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -55,6 +61,8 @@ class PriceMonitor:
         # (symbol, kind) -> date fired: each position stop/target wakes Claude
         # at most once per day so a hovering price doesn't spam ad-hoc cycles
         self._position_trigger_dates: dict[tuple[str, str], str] = {}
+        # symbol -> (bars, fetched_at): throttled intraday tape for stalk plans
+        self._bars_cache: dict[str, tuple[list, float]] = {}
 
     def set_kite_client(self, kite):
         """Inject Kite client for price fetching."""
@@ -97,6 +105,10 @@ class PriceMonitor:
                 self._check_alerts()
             except Exception as e:
                 logger.error(f"Price monitor error: {e}", exc_info=True)
+            try:
+                self._check_entry_plans()
+            except Exception as e:
+                logger.error(f"Entry-plan monitor error: {e}", exc_info=True)
 
             # Sleep in small increments so stop_event is responsive
             for _ in range(POLL_INTERVAL):
@@ -141,8 +153,8 @@ class PriceMonitor:
         # Open positions with a stop-loss or take-profit are watched automatically —
         # a breach between cycles must not wait up to 90 minutes for the next slot.
         positions = db.query(
-            "SELECT symbol, quantity, avg_price, stop_loss_price, take_profit_price "
-            "FROM portfolio WHERE session_id = ? AND quantity > 0 "
+            "SELECT id, symbol, quantity, avg_price, stop_loss_price, take_profit_price, "
+            "trail_high FROM portfolio WHERE session_id = ? AND quantity > 0 "
             "AND (stop_loss_price IS NOT NULL OR take_profit_price IS NOT NULL)",
             (self.session_id,),
         )
@@ -249,11 +261,42 @@ class PriceMonitor:
                           f"AUTO: stop-loss ₹{pos['stop_loss_price']} breached on your "
                           f"{pos['quantity']}-share position (avg ₹{pos['avg_price']}). "
                           f"Decide NOW: exit, or hold with explicit reasoning.")
-            elif pos["take_profit_price"] and current_price >= pos["take_profit_price"]:
-                breach = ("take_profit", pos["take_profit_price"], "above",
-                          f"AUTO: take-profit ₹{pos['take_profit_price']} reached on your "
-                          f"{pos['quantity']}-share position (avg ₹{pos['avg_price']}). "
-                          f"Lock in the profit or justify holding.")
+            elif pos["take_profit_price"]:
+                # TRAILING EXIT — crossing the target no longer market-sells the
+                # touch (the exit audit: every closed trade left money on the
+                # table; GRASIM took +0.98% of an available +4.15%). Instead the
+                # target arms a trail: ride the move, sell when it comes off
+                # the high, never exit below ~the target. Mechanical — no model,
+                # no API cost.
+                try:
+                    from aaitrade.entry_engine import evaluate_trail
+                    verdict = evaluate_trail(pos, current_price)
+                except Exception as e:
+                    logger.error(f"Trail evaluation failed for {symbol}: {e}")
+                    verdict = None
+                if verdict:
+                    if verdict["action"] in ("arm", "raise"):
+                        db.update("portfolio", pos["id"], {"trail_high": verdict["trail_high"]})
+                        if verdict["action"] == "arm":
+                            logger.info(f"TRAIL ARMED: {symbol} crossed target "
+                                        f"₹{pos['take_profit_price']} at ₹{current_price}")
+                    elif verdict["action"] == "sell":
+                        if self._execute_callback:
+                            if self._position_trigger_dates.get((symbol, "trail")) != today:
+                                self._position_trigger_dates[(symbol, "trail")] = today
+                                self._execute_callback({
+                                    "action": "SELL",
+                                    "symbol": symbol,
+                                    "quantity": pos["quantity"],
+                                    "reason": verdict["reason"],
+                                    "confidence": "high",
+                                    "flags": [],
+                                }, "trail_exit")
+                        else:
+                            # No mechanical path wired — degrade to the old
+                            # behaviour of waking the model to decide.
+                            breach = ("take_profit", pos["take_profit_price"], "above",
+                                      verdict["reason"])
 
             if breach:
                 kind, level, direction, reason = breach
@@ -285,6 +328,160 @@ class PriceMonitor:
                 self._trigger_callback(triggered)
             except Exception as e:
                 logger.error(f"Alert trigger callback failed: {e}", exc_info=True)
+
+    # ── Entry-plan stalking ────────────────────────────────────────────────
+    # The model files WHAT to buy (plan_entry); this loop decides WHEN, from
+    # the actual tape. Fills are mechanical — no model call, no API cost.
+
+    def _check_entry_plans(self):
+        now = datetime.now(_IST)
+
+        # Expire overdue plans at any time of day
+        for plan in db.query(
+            "SELECT id, symbol, expires_at FROM entry_plans "
+            "WHERE session_id = ? AND status IN ('stalking', 'partial')",
+            (self.session_id,),
+        ):
+            if plan["expires_at"] and plan["expires_at"] < now.strftime("%Y-%m-%dT%H:%M:%S"):
+                db.update("entry_plans", plan["id"], {
+                    "status": "expired", "resolved_at": db.now_iso(),
+                })
+                logger.info(f"Entry plan expired untriggered: {plan['symbol']}")
+
+        # Fills only during the tradable window (skip the volatile open) and
+        # never while a model cycle is running — the model may be acting on
+        # the same symbol at this moment.
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
+        if now < market_open or now > market_close:
+            return
+        if self._cycle_running.is_set() or not self._execute_callback:
+            return
+        session = db.query_one(
+            "SELECT status FROM sessions WHERE id = ?", (self.session_id,)
+        )
+        if not session or session["status"] != "active":
+            return
+
+        plans = db.query(
+            "SELECT * FROM entry_plans WHERE session_id = ? "
+            "AND status IN ('stalking', 'partial')",
+            (self.session_id,),
+        )
+        if not plans:
+            return
+
+        prices = self._fetch_prices([p["symbol"] for p in plans])
+        if not prices:
+            return
+
+        from aaitrade.entry_engine import evaluate_entry_plan, split_quantities
+
+        for plan in plans:
+            ltp = prices.get(plan["symbol"])
+            if not ltp:
+                continue
+
+            # The tape (15m bars) is only needed near the level — fetching it
+            # for a stock 3% away every 30s would waste API budget.
+            bars = []
+            if plan["touched"] or ltp <= plan["level"] * 1.015:
+                bars = self._fetch_intraday_bars(plan["symbol"])
+
+            verdict = evaluate_entry_plan(plan, bars, ltp)
+            if not verdict:
+                continue
+
+            if verdict["action"] == "touch":
+                db.update("entry_plans", plan["id"], {
+                    "touched": 1, "touch_low": verdict["touch_low"],
+                })
+                continue
+
+            if verdict["action"] == "runaway":
+                db.update("entry_plans", plan["id"], {
+                    "status": "runaway", "resolved_at": db.now_iso(),
+                })
+                logger.info(f"Entry plan abandoned (runaway/breakdown): {plan['symbol']}")
+                continue
+
+            if verdict["action"] == "fill":
+                self._fill_plan(plan, verdict, split_quantities)
+
+    def _fill_plan(self, plan: dict, verdict: dict, split_quantities):
+        """Execute a triggered plan through the mechanical callback."""
+        remaining = plan["quantity"] - plan["filled_quantity"]
+        if remaining <= 0:
+            return
+        trigger = verdict["trigger"]
+
+        if plan["fill_mode"] == "split" and trigger == "confirmed" and plan["filled_quantity"] == 0:
+            # Half now on the confirmation; the rest stays stalking for the
+            # discount until expiry. Never fully miss, always keep an order
+            # working at the better price.
+            qty, rest = split_quantities(remaining)
+        else:
+            qty, rest = remaining, 0  # discount fills (and single mode) take it all
+
+        result = self._execute_callback({
+            "action": "BUY",
+            "symbol": plan["symbol"],
+            "quantity": qty,
+            "reason": (plan["reason"] or "") + f" [entry plan #{plan['id']}: {trigger} trigger]",
+            "stop_loss_price": plan["stop_loss_price"],
+            "take_profit_price": plan["take_profit_price"],
+            "confidence": "high",
+            "flags": [],
+        }, f"entry_plan_{trigger}")
+
+        status = (result or {}).get("status")
+        if status == "executed":
+            filled = plan["filled_quantity"] + qty
+            db.update("entry_plans", plan["id"], {
+                "filled_quantity": filled,
+                "fill_price": (result or {}).get("price") or verdict["price"],
+                "trigger": trigger if not plan["trigger"] else "mixed",
+                "status": "partial" if rest > 0 else "filled",
+                "resolved_at": None if rest > 0 else db.now_iso(),
+            })
+            logger.info(
+                f"ENTRY PLAN FILLED: {plan['symbol']} x{qty} via {trigger}"
+                + (f" ({rest} still stalking the discount)" if rest else "")
+            )
+        else:
+            # A rejection here is structural (cash, position count, risk rule).
+            # Retrying every 30s would hammer the same wall — cancel and let
+            # the model re-decide next cycle with the rejection in front of it.
+            db.update("entry_plans", plan["id"], {
+                "status": "cancelled", "resolved_at": db.now_iso(),
+            })
+            logger.warning(
+                f"Entry plan for {plan['symbol']} triggered but execution was "
+                f"rejected: {(result or {}).get('reason')} — plan cancelled."
+            )
+
+    def _fetch_intraday_bars(self, symbol: str) -> list[dict]:
+        """Today's 15-minute bars, throttled to one fetch per 3 minutes per symbol."""
+        cached = self._bars_cache.get(symbol)
+        if cached and (time.time() - cached[1]) < 180:
+            return cached[0]
+        bars: list[dict] = []
+        if self._kite:
+            try:
+                from aaitrade.tools.market import _instrument_token_cache, _kite_lock
+                token = _instrument_token_cache.get(symbol)
+                if token:
+                    frm = datetime.now(_IST) - timedelta(days=2)
+                    with _kite_lock:
+                        raw = self._kite.historical_data(
+                            token, frm, datetime.now(_IST), "15minute"
+                        )
+                    bars = [{"low": b["low"], "high": b["high"], "close": b["close"]}
+                            for b in raw]
+            except Exception as e:
+                logger.warning(f"Intraday bars fetch failed for {symbol}: {e}")
+        self._bars_cache[symbol] = (bars, time.time())
+        return bars
 
     def _near_scheduled_cycle(self, now: datetime) -> bool:
         """Check if we're within GUARD_MINUTES of any scheduled cycle slot."""

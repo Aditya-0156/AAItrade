@@ -180,6 +180,7 @@ class SessionManager:
             session_id=self.session_id,
             trigger_callback=self._on_alert_triggered,
             max_position_loss_pct=getattr(self.config.risk_rules, "max_position_loss_pct", 1.5),
+            execute_callback=self._on_mechanical_execute,
         )
 
         # Notify via Telegram
@@ -495,6 +496,7 @@ class SessionManager:
                 session_id=self.session_id,
                 trigger_callback=self._on_alert_triggered,
                 max_position_loss_pct=getattr(self.config.risk_rules, "max_position_loss_pct", 1.5),
+                execute_callback=self._on_mechanical_execute,
             )
             # Wire up the Kite client if it's already initialised
             from aaitrade.tools import market as _market
@@ -615,6 +617,39 @@ class SessionManager:
             # Stop price monitor when session ends
             if hasattr(self, '_price_monitor'):
                 self._price_monitor.stop()
+
+    def _on_mechanical_execute(self, decision: dict, context: str) -> dict:
+        """Execute a monitor-decided trade (entry-plan fill or trailing exit).
+
+        These are trades the model already reasoned about — the plan carries
+        its thesis, the trail protects its target — so no model call happens
+        here. Python times, Python executes, the model reads the outcome in
+        its next briefing. That is the whole point: observation at 30-second
+        resolution costs nothing; a model wake-up costs an ad-hoc cycle.
+        """
+        try:
+            # Journal/alert writes inside the executor need tool context
+            self._set_tool_context()
+        except Exception:
+            pass
+        try:
+            result = self.executor.execute(decision)
+        except Exception as e:
+            logger.error(f"Mechanical {context} execution failed: {e}", exc_info=True)
+            return {"status": "error", "reason": str(e)}
+
+        bot = get_bot()
+        if bot:
+            emoji = "🎯" if decision["action"] == "BUY" else "🏁"
+            bot.send(
+                f"{emoji} *{context.replace('_', ' ').title()}* — "
+                f"{decision['action']} {decision['symbol']} x{decision.get('quantity')}\n"
+                f"Status: {result.get('status')}"
+                + (f" @ ₹{result.get('price')}" if result.get('price') else "")
+                + (f"\nP&L: ₹{result.get('pnl'):.0f}" if result.get('pnl') is not None else "")
+                + f"\n{decision.get('reason', '')[:200]}"
+            )
+        return result
 
     def _on_alert_triggered(self, triggered_alerts: list[dict]):
         """Called by PriceMonitor when price alerts fire. Runs an ad-hoc cycle."""
@@ -996,8 +1031,9 @@ class SessionManager:
         """
         from aaitrade.tools import (
             portfolio_tools, memory, journal, watchlist_tools,
-            session_memory, session_analysis, pipeline,
+            session_memory, session_analysis, pipeline, entry_plans,
         )
+        entry_plans.set_session_context(self.session_id, self.cycle_count)
         pipeline.set_session_id(self.session_id)
         portfolio_tools.set_session_id(self.session_id)
         memory.set_session_id(self.session_id)

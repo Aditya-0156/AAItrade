@@ -28,9 +28,29 @@ _cycle_number: int | None = None
 _alert_mode: bool = False  # True during ad-hoc alert-triggered cycles — bypasses the 9:30 slot trade block
 
 
-GOAL_MARGIN_LOW = 1.0    # % — the usual profit band per trade
-GOAL_MARGIN_HIGH = 2.0   # % — beyond this is allowed, but must be earned
+# Default profit band. The live audit (89% hit rate, still net-negative after
+# costs) proved 1-2% targets cannot outrun ~0.25%/round-trip charges plus a
+# median 1.28% adverse move — the band, not the accuracy, was the constraint.
+GOAL_MARGIN_LOW = 1.0    # % — legacy default (safe/balanced)
+GOAL_MARGIN_HIGH = 2.0   # % — legacy default (safe/balanced)
 STRONG_EVIDENCE_CHARS = 80  # evidence bar for pushing past the usual band
+
+# Per-mode bands: (usual_low, needs-strong-evidence-above)
+_MODE_GOAL_MARGINS = {
+    "aggressive": (2.5, 5.0),
+    "conviction": (5.0, 10.0),
+}
+AGGRESSIVE_MIN_TARGET_PCT = 2.5  # new buys must clear this — see audit above
+
+
+def _goal_margins() -> tuple[float, float]:
+    try:
+        sess = db.query_one("SELECT trading_mode FROM sessions WHERE id = ?", (_session_id,))
+        if sess and sess["trading_mode"] in _MODE_GOAL_MARGINS:
+            return _MODE_GOAL_MARGINS[sess["trading_mode"]]
+    except Exception:
+        pass
+    return (GOAL_MARGIN_LOW, GOAL_MARGIN_HIGH)
 
 
 @register_tool(
@@ -90,6 +110,7 @@ def update_position_targets(symbol: str, evidence: str,
 
     entry = pos["avg_price"]
     old_stop, old_target = pos["stop_loss_price"], pos["take_profit_price"]
+    goal_low, goal_high = _goal_margins()
 
     # Evidence quality — same bar as why_now on a buy
     text = (evidence or "").strip()
@@ -133,12 +154,12 @@ def update_position_targets(symbol: str, evidence: str,
 
         # Above the usual 1-2% band is permitted — but the evidence bar rises
         # with the ambition. A bigger target is a bigger claim.
-        if target_pct > GOAL_MARGIN_HIGH and len(text) < STRONG_EVIDENCE_CHARS:
+        if target_pct > goal_high and len(text) < STRONG_EVIDENCE_CHARS:
             return {
                 "status": "rejected",
                 "reason": (
                     f"₹{take_profit_price} is {target_pct:.1f}% above your entry ₹{entry:.2f}, "
-                    f"beyond the usual {GOAL_MARGIN_LOW:.0f}-{GOAL_MARGIN_HIGH:.0f}% band. That "
+                    f"beyond the usual {goal_low:.1f}-{goal_high:.1f}% band. That"
                     f"is allowed, but it needs real evidence — what specifically says this runs "
                     f"further? Volume expansion, a breakout above a long-held level, a fresh "
                     f"catalyst, sector-wide strength. Give the detail, or take the profit at "
@@ -166,9 +187,9 @@ def update_position_targets(symbol: str, evidence: str,
     note = ""
     if "take_profit_price" in updates:
         pct = (updates["take_profit_price"] - entry) / entry * 100
-        if pct > GOAL_MARGIN_HIGH:
-            note = (f" NOTE: {pct:.1f}% is above the usual {GOAL_MARGIN_LOW:.0f}-"
-                    f"{GOAL_MARGIN_HIGH:.0f}% band — you have justified it, now manage it. "
+        if pct > goal_high:
+            note = (f" NOTE: {pct:.1f}% is above the usual {goal_low:.1f}-"
+                    f"{goal_high:.1f}% band — you have justified it, now manage it. "
                     f"Ratchet the stop up as it advances and take the profit the moment "
                     f"the momentum you cited fades.")
 
@@ -223,7 +244,7 @@ def _research_gate(symbol: str, why_now: str) -> dict | None:
     # experience says a prompt instruction alone gets skipped, so enforce it.
     try:
         sess = db.query_one("SELECT trading_mode FROM sessions WHERE id = ?", (_session_id,))
-        if sess and sess["trading_mode"] == "conviction":
+        if sess and sess["trading_mode"] in ("conviction", "aggressive"):
             checked_amp = db.query_one(
                 "SELECT 1 FROM tool_calls WHERE session_id = ? AND cycle_number = ? "
                 "AND tool_name = 'analyse_amplitude' AND parameters LIKE ?",
@@ -269,6 +290,75 @@ def _research_gate(symbol: str, why_now: str) -> dict | None:
             ),
         }
     return None
+
+
+def _entry_discipline_gate(symbol: str, take_profit_price: float | None,
+                           immediate_reason: str) -> dict | None:
+    """Route new-position buys through the entry engine (aggressive/conviction).
+
+    The audit is unambiguous: 15/15 direct buys drew down after entry, median
+    -1.28%, low arriving ~27h later — buying the first touch of a level pays
+    the top of the dip. plan_entry hands the WHEN to the price monitor, which
+    watches the tape at 30-second resolution and fills on a calibrated
+    overshoot or a confirmed defence.
+
+    A direct buy stays available for genuinely time-critical catalysts (a
+    crude spike for an oil producer, a policy release) via immediate_reason —
+    the edge there is in the news, not in the level, so waiting forfeits it.
+    """
+    try:
+        sess = db.query_one("SELECT trading_mode FROM sessions WHERE id = ?", (_session_id,))
+        mode = sess["trading_mode"] if sess else ""
+        if mode not in ("aggressive", "conviction"):
+            return None
+
+        # Aggressive: the target itself must clear the cost-viable minimum.
+        if mode == "aggressive" and take_profit_price:
+            try:
+                from aaitrade.tools.market import get_current_price
+                q = get_current_price(symbol)
+                ltp = q.get("price") or q.get("last_price") or 0
+            except Exception:
+                ltp = 0
+            if ltp and (take_profit_price - ltp) / ltp * 100 < AGGRESSIVE_MIN_TARGET_PCT:
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Target ₹{take_profit_price} is under {AGGRESSIVE_MIN_TARGET_PCT}% above "
+                        f"the current ₹{ltp}. Small targets lost this desk money at an 89% win "
+                        f"rate — charges eat ~0.25% per round trip and the median adverse move "
+                        f"is 1.3%, so a 1-2% win barely clears its own costs. Find a target the "
+                        f"stock's amplitude actually supports (analyse_amplitude), or skip."
+                    ),
+                }
+
+        # Averaging into an existing position is not a new entry decision.
+        existing = db.query_one(
+            "SELECT 1 FROM portfolio WHERE session_id = ? AND symbol = ?",
+            (_session_id, symbol),
+        )
+        if existing:
+            return None
+
+        text = clean_model_text(immediate_reason).strip()
+        if len(text) >= 60 and sum(1 for ph in _TEMPLATE_PHRASES if ph in text.lower()) < 2:
+            return None  # a real, named, time-critical catalyst — direct buy allowed
+
+        return {
+            "status": "rejected",
+            "reason": (
+                f"Direct market buys pay the top of the dip — every one of this desk's "
+                f"buys drew down after entry (median -1.3%, bottom ~27h later). File the "
+                f"trade with plan_entry('{symbol}', level, quantity, why_now, ...) and the "
+                f"monitor will fill it on a calibrated overshoot or a confirmed defence of "
+                f"your level. ONLY if the edge is a time-critical catalyst that expires "
+                f"within hours (named event, not chart structure) may you buy directly — "
+                f"pass immediate_reason explaining exactly why waiting forfeits the trade."
+            ),
+        }
+    except Exception as e:
+        logger.warning(f"Entry discipline gate failed for {symbol}: {e}")
+        return None
 
 
 def set_trading_context(executor, session_id: int, cycle_number: int, alert_mode: bool = False):
@@ -339,6 +429,14 @@ def set_trading_context(executor, session_id: int, cycle_number: int, alert_mode
                 "type": "string",
                 "description": "For BUY: what must happen for this trade to work. Omit for SELL.",
             },
+            "immediate_reason": {
+                "type": "string",
+                "description": (
+                    "BUY only, rarely: bypasses the plan_entry requirement when the edge is a "
+                    "time-critical catalyst (named news event) that expires within hours. "
+                    "Chart structure is never time-critical — use plan_entry for levels."
+                ),
+            },
         },
         "required": ["action", "symbol", "quantity", "reason"],
     },
@@ -352,6 +450,7 @@ def execute_trade(
     take_profit_price: float | None = None,
     thesis: str = "",
     why_now: str = "",
+    immediate_reason: str = "",
 ) -> dict:
 
     # Model text occasionally carries leaked tool-call markup; it corrupts the
@@ -373,6 +472,9 @@ def execute_trade(
     # why the price is where it is. Both are enforced, not merely requested.
     if action.upper() == "BUY":
         gate = _research_gate(symbol, why_now)
+        if gate:
+            return gate
+        gate = _entry_discipline_gate(symbol, take_profit_price, immediate_reason)
         if gate:
             return gate
 

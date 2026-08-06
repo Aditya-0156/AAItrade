@@ -141,6 +141,7 @@ _TOOL_MODULES = [
     "aaitrade.tools.knowledge_tools",
     "aaitrade.tools.amplitude",
     "aaitrade.tools.pipeline",
+    "aaitrade.tools.entry_plans",
 ]
 
 

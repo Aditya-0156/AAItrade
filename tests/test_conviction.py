@@ -220,6 +220,32 @@ class TestAmplitudeGate:
         assert "analyse_amplitude" in r["reason"]
 
     def test_buy_allowed_after_amplitude_check(self, conviction_session):
+        """Direct buys also need immediate_reason now (entry-discipline gate) —
+        a time-critical catalyst is the only path around plan_entry."""
+        from unittest.mock import patch
+        from aaitrade.tools import trading
+        from tests.conftest import make_price
+        db.insert("tool_calls", {
+            "session_id": conviction_session, "cycle_number": 1,
+            "tool_name": "analyse_amplitude",
+            "parameters": '{"symbol": "RELIANCE", "target_pct": 6}',
+            "result_summary": "{}", "called_at": db.now_iso(),
+        })
+        with patch("aaitrade.tools.market.get_current_price", return_value=make_price("RELIANCE", 1000)), \
+             patch.object(trading, "datetime") as dt:
+            dt.now.return_value = _TRADING_HOURS
+            r = trading.execute_trade(
+                "BUY", "RELIANCE", 2, reason="x", why_now=self._why(),
+                immediate_reason=(
+                    "Crude broke to a multi-month high within the last hour on supply "
+                    "headlines; the repricing happens today — waiting for a dip forfeits it."
+                ),
+            )
+        assert r["status"] == "executed"
+
+    def test_buy_without_catalyst_is_routed_to_plan_entry(self, conviction_session):
+        """Chart-structure entries must go through plan_entry — the audit showed
+        first-touch buys pay the top of the dip (15/15 drew down, median -1.28%)."""
         from unittest.mock import patch
         from aaitrade.tools import trading
         from tests.conftest import make_price
@@ -233,7 +259,8 @@ class TestAmplitudeGate:
              patch.object(trading, "datetime") as dt:
             dt.now.return_value = _TRADING_HOURS
             r = trading.execute_trade("BUY", "RELIANCE", 2, reason="x", why_now=self._why())
-        assert r["status"] == "executed"
+        assert r["status"] == "rejected"
+        assert "plan_entry" in r["reason"]
 
     def test_other_modes_are_not_gated(self, in_memory_db, balanced_config, session_with_watchlist):
         """The scalping session sizes differently and must not be blocked by this."""

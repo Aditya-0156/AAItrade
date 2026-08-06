@@ -17,8 +17,8 @@ class TestSystemPrompt:
     def test_system_prompt_contains_risk_rules(self, in_memory_db, balanced_config, session_with_watchlist):
         ctx = ContextBuilder(balanced_config, session_with_watchlist)
         prompt = ctx.build_system_prompt()
-        # Balanced: max_per_trade=10, stop_loss=3, take_profit=5
-        assert "10" in prompt
+        # Balanced: max_per_trade=20, stop_loss=3, take_profit=5
+        assert "20" in prompt
         assert "3" in prompt
 
     def test_system_prompt_contains_watchlist_stocks(self, in_memory_db, balanced_config, session_with_watchlist):

@@ -316,8 +316,10 @@ def analyze_levels(
             },
             "range_90d": {"low": round(lo90, 2), "high": round(hi90, 2)},
             "trend_context": trend,  # ← is the 14d band a range, or a step down?
-            "supports_30d": supports,        # 3+ touch bands below current
-            "resistances_30d": resistances,  # 3+ touch bands above current
+            # Top 4 each — beyond that is context bloat: every extra row is
+            # re-read by every later round of the cycle at token cost.
+            "supports_30d": supports[:4],        # 3+ touch bands below current
+            "resistances_30d": resistances[:4],  # 3+ touch bands above current
             "shape_14d": shape,
         }
 

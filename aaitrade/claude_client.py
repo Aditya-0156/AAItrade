@@ -76,15 +76,31 @@ class ClaudeClient:
         # Track token spend per cycle for observability
         usage_totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
 
+        # Per-cycle tool budgets. The live audit found one cycle carrying 222
+        # analyze_levels results in context — every subsequent round re-reads
+        # all of them (avg 284k cached tokens/request). Past these counts the
+        # model is procrastinating with data, not deciding.
+        call_counts: dict[str, int] = {}
+        CALL_BUDGETS = {
+            "analyze_levels": 10,
+            "get_current_price": 12,
+            "get_indicators": 8,
+            "get_price_history": 8,
+            "get_stock_news": 10,
+        }
+
         # Tool-use loop: Claude may call tools multiple times before deciding
         for round_num in range(self.max_tool_rounds):
             # Acquire global lock so only one session calls Claude at a time
             with _claude_lock:
                 for attempt in range(4):
                     try:
+                        # 4096 output cap: conviction's Sonnet cycles were
+                        # averaging 12k output tokens — essays, not decisions.
+                        # Output is the most expensive token class by far.
                         response = self.client.messages.create(
                             model=model,
-                            max_tokens=8192,
+                            max_tokens=4096,
                             **sampling_kwargs(model, 0.3),
                             system=[
                                 {
@@ -143,8 +159,21 @@ class ClaudeClient:
                             f"Cycle {cycle_number} | Tool call: {tool_name}({tool_input})"
                         )
 
-                        # Execute the tool
-                        result = call_tool(tool_name, tool_input)
+                        # Execute the tool — unless its cycle budget is spent
+                        call_counts[tool_name] = call_counts.get(tool_name, 0) + 1
+                        budget = CALL_BUDGETS.get(tool_name)
+                        if budget and call_counts[tool_name] > budget:
+                            result = {
+                                "status": "budget_exhausted",
+                                "reason": (
+                                    f"You have called {tool_name} {budget} times this cycle — "
+                                    f"that is the budget. More data will not improve this "
+                                    f"decision; decide with what you have, file plans/alerts "
+                                    f"for what you cannot decide, and revisit next cycle."
+                                ),
+                            }
+                        else:
+                            result = call_tool(tool_name, tool_input)
 
                         # Log tool call to DB
                         db.insert("tool_calls", {
