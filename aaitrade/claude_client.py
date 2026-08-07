@@ -80,13 +80,19 @@ class ClaudeClient:
         # analyze_levels results in context — every subsequent round re-reads
         # all of them (avg 284k cached tokens/request). Past these counts the
         # model is procrastinating with data, not deciding.
+        # Sized against observed per-cycle usage so a genuine wide scan is never
+        # cut short: the live max was analyze_levels 18, prices 9, indicators 5,
+        # history 3, news 10. Only the long tail is trimmed. Research tools
+        # (search_web, fundamentals, sector news, amplitude, policy, journal)
+        # are deliberately UNBUDGETED — the audit's problem was too little
+        # research and too much repeated level-checking, not the reverse.
         call_counts: dict[str, int] = {}
         CALL_BUDGETS = {
-            "analyze_levels": 10,
-            "get_current_price": 12,
-            "get_indicators": 8,
-            "get_price_history": 8,
-            "get_stock_news": 10,
+            "analyze_levels": 15,
+            "get_current_price": 14,
+            "get_indicators": 10,
+            "get_price_history": 10,
+            "get_stock_news": 14,
         }
 
         # Tool-use loop: Claude may call tools multiple times before deciding
